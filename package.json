@@ -1,0 +1,10 @@
+{
+  "name": "deniz-ad-command-center",
+  "version": "1.0.0",
+  "description": "Real-time Meta Ads health dashboard",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
