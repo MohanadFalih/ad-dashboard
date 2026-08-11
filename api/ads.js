@@ -39,9 +39,9 @@ export default async function handler(req, res) {
     const until = getDateString(-1);
 
     const url = `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/adsets` +
-      `?fields=name,status,daily_budget,campaign{name},` +
-      `insights.date_preset(last_3d){spend,cpm,cpc,ctr,frequency,actions,action_values}`
-      `&access_token=${META_ACCESS_TOKEN}`;
+  `?fields=name,status,daily_budget,campaign{name},` +
+  `insights.date_preset(last_3d){spend,cpm,cpc,ctr,frequency,actions,action_values}` +
+  `&access_token=${META_ACCESS_TOKEN}`;
 
     const metaRes = await fetch(url);
     const metaData = await metaRes.json();
