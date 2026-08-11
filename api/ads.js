@@ -40,7 +40,7 @@ export default async function handler(req, res) {
 
     const url = `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/adsets` +
       `?fields=name,status,daily_budget,campaign{name},` +
-      `insights.date_preset(last_3d){spend,purchases,cpm,cpc,ctr,frequency,actions,action_values}` +
+      `insights.date_preset(last_3d){spend,cpm,cpc,ctr,frequency,actions,action_values}`
       `&access_token=${META_ACCESS_TOKEN}`;
 
     const metaRes = await fetch(url);
@@ -162,8 +162,12 @@ function getDateString(offsetDays) {
 
 function getActionCount(actions, actionType) {
   if (!actions) return 0;
-  const act = actions.find(a => a.action_type === actionType);
-  return act ? act.value : 0;
+  const act = actions.find(a => {
+    if (a.action_type === actionType) return true;
+    if (actionType === 'purchase' && a.action_type?.includes('purchase')) return true;
+    return false;
+  });
+  return act ? parseInt(act.value) : 0;
 }
 
 function estimateDays(name) {
