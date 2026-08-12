@@ -1,429 +1,626 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="theme-color" content="#0f172a">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Deniz Ad Command Center</title>
-<link rel="manifest" href="/manifest.json">
-<link rel="apple-touch-icon" href="/icon-192.png">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  :root {
-    --bg: #0b0f19;
-    --card: #151b2b;
-    --card-hover: #1a2235;
-    --text: #e2e8f0;
-    --muted: #64748b;
-    --green: #22c55e;
-    --green-dim: rgba(34,197,94,0.12);
-    --yellow: #eab308;
-    --yellow-dim: rgba(234,179,8,0.12);
-    --red: #ef4444;
-    --red-dim: rgba(239,68,68,0.12);
-    --blue: #3b82f6;
-    --border: #1e293b;
-    --danger-glow: 0 0 20px rgba(239,68,68,0.3);
-  }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    min-height: 100vh;
-    -webkit-font-smoothing: antialiased;
-  }
-  .container { max-width: 900px; margin: 0 auto; padding: 16px; }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deniz Ad Command Center</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0a0a0f">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface-2: #1a1a25;
+      --border: #2a2a3a;
+      --text: #e8e8f0;
+      --text-dim: #8888a0;
+      --accent: #ff4757;
+      --accent-glow: rgba(255, 71, 87, 0.3);
+      --warning: #ffa502;
+      --success: #2ed573;
+      --info: #1e90ff;
+      --danger: #ff4757;
+      --dead: #57606f;
+    }
 
-  /* KILL ALERT BANNER */
-  .kill-banner {
-    background: linear-gradient(135deg, #7f1d1d, #991b1b);
-    border: 1px solid #ef4444;
-    border-radius: 14px;
-    padding: 16px;
-    margin-bottom: 16px;
-    animation: pulse 2s infinite;
-    display: none;
-  }
-  .kill-banner.active { display: block; }
-  .kill-banner h2 { font-size: 16px; color: #fca5a5; margin-bottom: 8px; }
-  .kill-item {
-    background: rgba(0,0,0,0.3);
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin-bottom: 6px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .kill-item-name { font-weight: 700; font-size: 14px; }
-  .kill-item-reason { font-size: 12px; color: #fca5a5; }
-  .kill-btn {
-    background: var(--red);
-    color: white;
-    border: none;
-    padding: 6px 14px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    cursor: pointer;
-  }
-  @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
-    50% { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
-  }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
-  /* HEADER */
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    padding-top: env(safe-area-inset-top);
-  }
-  .header h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
-  .refresh-btn {
-    background: var(--card);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 8px 14px;
-    border-radius: 10px;
-    font-size: 13px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .refresh-btn.spinning svg { animation: spin 1s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .last-update { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      padding: 20px;
+    }
 
-  /* KPI ROW */
-  .kpi-row {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 10px;
-    margin-bottom: 16px;
-  }
-  .kpi {
-    background: var(--card);
-    border-radius: 12px;
-    padding: 14px 8px;
-    text-align: center;
-    border: 1px solid var(--border);
-    transition: transform 0.15s;
-  }
-  .kpi:active { transform: scale(0.96); }
-  .kpi-value { font-size: 22px; font-weight: 800; }
-  .kpi-label { font-size: 10px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .kpi.healthy { border-color: var(--green); background: var(--green-dim); }
-  .kpi.healthy .kpi-value { color: var(--green); }
-  .kpi.warning { border-color: var(--yellow); background: var(--yellow-dim); }
-  .kpi.warning .kpi-value { color: var(--yellow); }
-  .kpi.danger { border-color: var(--red); background: var(--red-dim); }
-  .kpi.danger .kpi-value { color: var(--red); }
+    .container { max-width: 1400px; margin: 0 auto; }
 
-  /* FILTER TABS */
-  .filters {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 14px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    -webkit-overflow-scrolling: touch;
-  }
-  .filter-btn {
-    background: var(--card);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    padding: 8px 16px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .filter-btn.active {
-    background: var(--blue);
-    color: white;
-    border-color: var(--blue);
-  }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
 
-  /* AD CARDS */
-  .ad-list { display: flex; flex-direction: column; gap: 10px; }
-  .ad-card {
-    background: var(--card);
-    border-radius: 14px;
-    padding: 14px;
-    border-left: 4px solid transparent;
-    transition: all 0.2s;
-    position: relative;
-    overflow: hidden;
-  }
-  .ad-card:active { transform: scale(0.98); }
-  .ad-card.healthy { border-left-color: var(--green); }
-  .ad-card.warning { border-left-color: var(--yellow); }
-  .ad-card.danger { border-left-color: var(--red); box-shadow: var(--danger-glow); }
-  .ad-card.dying { border-left-color: #f97316; }
-  .ad-card.dead { border-left-color: #475569; opacity: 0.6; }
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
 
-  .ad-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
-  .ad-name { font-weight: 700; font-size: 15px; line-height: 1.3; flex: 1; padding-right: 8px; }
-  .ad-badge {
-    font-size: 10px; font-weight: 800;
-    padding: 4px 10px; border-radius: 20px;
-    text-transform: uppercase; letter-spacing: 0.3px;
-  }
-  .badge-healthy { background: var(--green-dim); color: var(--green); }
-  .badge-warning { background: var(--yellow-dim); color: var(--yellow); }
-  .badge-danger { background: var(--red-dim); color: var(--red); }
-  .badge-dying { background: rgba(249,115,22,0.12); color: #f97316; }
-  .badge-dead { background: rgba(71,85,105,0.2); color: #94a3b8; }
+    h1 span { color: var(--accent); }
 
-  .ad-meta { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-  .meta-tag { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.04); padding: 3px 8px; border-radius: 6px; }
+    .refresh-btn {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 20px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
 
-  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .metric { background: rgba(255,255,255,0.03); border-radius: 8px; padding: 8px; }
-  .metric-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; }
-  .metric-value { font-size: 14px; font-weight: 700; margin-top: 2px; }
-  .metric-value.good { color: var(--green); }
-  .metric-value.bad { color: var(--red); }
-  .metric-value.warn { color: var(--yellow); }
+    .refresh-btn:hover {
+      background: var(--border);
+      transform: translateY(-1px);
+    }
 
-  .action-strip {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-    font-size: 12px;
-    font-weight: 600;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .action-text.healthy { color: var(--green); }
-  .action-text.warning { color: var(--yellow); }
-  .action-text.danger { color: var(--red); }
-  .action-text.dying { color: #f97316; }
+    .refresh-btn.spinning svg { animation: spin 1s linear infinite; }
 
-  .cpm-bar { height: 3px; background: rgba(255,255,255,0.05); border-radius: 2px; margin-top: 4px; overflow: hidden; }
-  .cpm-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-  .loading { text-align: center; padding: 60px 20px; color: var(--muted); }
-  .error-box { background: var(--red-dim); border: 1px solid var(--red); border-radius: 12px; padding: 16px; margin: 20px 0; color: #fca5a5; font-size: 13px; }
+    .date-controls {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
 
-  /* Pull to refresh indicator */
-  .ptr-indicator { text-align: center; padding: 10px; color: var(--muted); font-size: 12px; display: none; }
+    .preset-btns {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
 
-  @media (min-width: 768px) {
-    .kpi-row { grid-template-columns: repeat(7, 1fr); }
-    .ad-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  }
-</style>
+    .preset-btn {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+
+    .preset-btn:hover {
+      border-color: var(--text-dim);
+      color: var(--text);
+    }
+
+    .preset-btn.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    .date-divider {
+      width: 1px;
+      height: 32px;
+      background: var(--border);
+      margin: 0 4px;
+    }
+
+    .date-input-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .date-input-group input[type="date"] {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+      color-scheme: dark;
+    }
+
+    .date-input-group input[type="date"]:focus {
+      border-color: var(--accent);
+    }
+
+    .date-input-group span {
+      color: var(--text-dim);
+      font-size: 0.85rem;
+    }
+
+    .apply-btn {
+      background: var(--info);
+      border: none;
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+
+    .apply-btn:hover {
+      opacity: 0.85;
+      transform: translateY(-1px);
+    }
+
+    .range-display {
+      margin-left: auto;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      background: var(--surface-2);
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      text-align: center;
+      transition: transform 0.2s;
+    }
+
+    .card:hover { transform: translateY(-2px); }
+
+    .card-value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .card-label {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .card.healthy { border-color: rgba(46, 213, 115, 0.3); }
+    .card.healthy .card-value { color: var(--success); }
+
+    .card.warning { border-color: rgba(255, 165, 2, 0.3); }
+    .card.warning .card-value { color: var(--warning); }
+
+    .card.danger { border-color: rgba(255, 71, 87, 0.3); }
+    .card.danger .card-value { color: var(--danger); }
+
+    .card.dying { border-color: rgba(255, 165, 2, 0.2); }
+    .card.dying .card-value { color: var(--warning); }
+
+    .card.dead { border-color: rgba(87, 96, 111, 0.3); }
+    .card.dead .card-value { color: var(--dead); }
+
+    .card.money { border-color: rgba(30, 144, 255, 0.3); }
+    .card.money .card-value { color: var(--info); }
+
+    .kill-section {
+      background: linear-gradient(135deg, rgba(255, 71, 87, 0.08), rgba(255, 71, 87, 0.02));
+      border: 1px solid rgba(255, 71, 87, 0.25);
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+
+    .kill-section h2 {
+      font-size: 1.1rem;
+      color: var(--accent);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .kill-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: rgba(255, 71, 87, 0.06);
+      border-radius: 10px;
+      margin-bottom: 8px;
+      border-left: 3px solid var(--accent);
+    }
+
+    .kill-item-name { font-weight: 600; font-size: 0.9rem; }
+    .kill-item-reason { font-size: 0.8rem; color: var(--text-dim); }
+
+    .table-container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+
+    .table-header {
+      display: grid;
+      grid-template-columns: 2fr 0.8fr 0.8fr 0.7fr 0.7fr 0.7fr 0.7fr 0.8fr 1fr;
+      gap: 8px;
+      padding: 14px 16px;
+      background: var(--surface-2);
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .ad-row {
+      display: grid;
+      grid-template-columns: 2fr 0.8fr 0.8fr 0.7fr 0.7fr 0.7fr 0.7fr 0.8fr 1fr;
+      gap: 8px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+      font-size: 0.85rem;
+      transition: background 0.15s;
+    }
+
+    .ad-row:hover { background: var(--surface-2); }
+    .ad-row:last-child { border-bottom: none; }
+
+    .ad-name { font-weight: 600; }
+    .ad-campaign { font-size: 0.75rem; color: var(--text-dim); }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-healthy { background: rgba(46, 213, 115, 0.15); color: var(--success); }
+    .badge-warning { background: rgba(255, 165, 2, 0.15); color: var(--warning); }
+    .badge-dying { background: rgba(255, 165, 2, 0.1); color: var(--warning); }
+    .badge-danger { background: rgba(255, 71, 87, 0.15); color: var(--danger); }
+    .badge-dead { background: rgba(87, 96, 111, 0.15); color: var(--dead); }
+
+    .num { font-family: 'SF Mono', Monaco, monospace; font-weight: 600; }
+    .num-neg { color: var(--danger); }
+    .num-pos { color: var(--success); }
+
+    .loading {
+      text-align: center;
+      padding: 60px;
+      color: var(--text-dim);
+    }
+
+    .error-box {
+      background: rgba(255, 71, 87, 0.1);
+      border: 1px solid rgba(255, 71, 87, 0.3);
+      border-radius: 14px;
+      padding: 24px;
+      text-align: center;
+      margin: 40px auto;
+      max-width: 600px;
+    }
+
+    .error-box h3 { color: var(--accent); margin-bottom: 8px; }
+    .error-box p { color: var(--text-dim); font-size: 0.9rem; }
+    .error-box code {
+      background: var(--surface-2);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      color: var(--text);
+    }
+
+    .last-updated {
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 0.75rem;
+      margin-top: 20px;
+    }
+
+    @media (max-width: 900px) {
+      .table-header, .ad-row {
+        grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+      }
+      .table-header > :nth-child(5),
+      .table-header > :nth-child(6),
+      .table-header > :nth-child(7),
+      .ad-row > :nth-child(5),
+      .ad-row > :nth-child(6),
+      .ad-row > :nth-child(7) { display: none; }
+    }
+
+    @media (max-width: 600px) {
+      .date-controls { flex-direction: column; align-items: stretch; }
+      .range-display { margin-left: 0; text-align: center; }
+      .preset-btns { justify-content: center; }
+      h1 { font-size: 1.2rem; }
+    }
+  </style>
 </head>
 <body>
-<div class="container">
-  <div class="ptr-indicator" id="ptrIndicator">↓ Pull to refresh</div>
+  <div class="container">
+    <header>
+      <h1>Deniz <span>Ad Command Center</span></h1>
+      <button class="refresh-btn" onclick="loadData()" id="refreshBtn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="23 4 23 10 17 10"></polyline>
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+        </svg>
+        Pull to refresh
+      </button>
+    </header>
 
-  <!-- KILL BANNER -->
-  <div class="kill-banner" id="killBanner">
-    <h2>🚨 KILL THESE ADS NOW</h2>
-    <div id="killList"></div>
-  </div>
-
-  <!-- HEADER -->
-  <div class="header">
-    <div>
-      <h1>🎯 Ad Command</h1>
-      <div class="last-update" id="lastUpdate">Loading...</div>
-    </div>
-    <button class="refresh-btn" id="refreshBtn" onclick="loadData()">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <polyline points="23 4 23 10 17 10"></polyline>
-        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-      </svg>
-      Refresh
-    </button>
-  </div>
-
-  <!-- KPIs -->
-  <div class="kpi-row" id="kpiRow">
-    <div class="kpi"><div class="kpi-value">—</div><div class="kpi-label">Loading</div></div>
-  </div>
-
-  <!-- FILTERS -->
-  <div class="filters" id="filters">
-    <button class="filter-btn active" onclick="filterAds('all')">All</button>
-    <button class="filter-btn" onclick="filterAds('healthy')">🟢 Healthy</button>
-    <button class="filter-btn" onclick="filterAds('warning')">🟡 Watch</button>
-    <button class="filter-btn" onclick="filterAds('dying')">🟠 Dying</button>
-    <button class="filter-btn" onclick="filterAds('danger')">🔴 Kill Now</button>
-    <button class="filter-btn" onclick="filterAds('dead')">⚫ Dead</button>
-  </div>
-
-  <!-- AD LIST -->
-  <div class="ad-list" id="adList">
-    <div class="loading">Pulling data from Meta...</div>
-  </div>
-</div>
-
-<script>
-const API_URL = '/api/ads'; // Change this to your Vercel URL after deploy
-let currentFilter = 'all';
-let allAds = [];
-
-// Auto-refresh every 15 minutes
-setInterval(loadData, 15 * 60 * 1000);
-
-// Load on open
-document.addEventListener('DOMContentLoaded', loadData);
-
-async function loadData() {
-  const btn = document.getElementById('refreshBtn');
-  btn.classList.add('spinning');
-  document.getElementById('adList').innerHTML = '<div class="loading">Pulling fresh data from Meta...</div>';
-
-  try {
-    const res = await fetch(API_URL);
-    const data = await res.json();
-
-    if (data.error) throw new Error(data.error.message || data.error);
-
-    allAds = data.ads || [];
-    renderSummary(data.summary);
-    renderKillBanner(data.summary.killList);
-    renderAds(allAds);
-    document.getElementById('lastUpdate').textContent = 'Updated: ' + data.summary.lastRefresh;
-  } catch (err) {
-    document.getElementById('adList').innerHTML = `
-      <div class="error-box">
-        <strong>Error loading data</strong><br>
-        ${err.message}<br><br>
-        <small>If this is your first time, make sure you deployed the backend and set environment variables.</small>
-      </div>`;
-  } finally {
-    btn.classList.remove('spinning');
-  }
-}
-
-function renderSummary(s) {
-  const row = document.getElementById('kpiRow');
-  row.innerHTML = `
-    <div class="kpi healthy"><div class="kpi-value">${s.healthy}</div><div class="kpi-label">Healthy</div></div>
-    <div class="kpi warning"><div class="kpi-value">${s.warning}</div><div class="kpi-label">Watch</div></div>
-    <div class="kpi" style="border-color:#f97316"><div class="kpi-value" style="color:#f97316">${s.dying}</div><div class="kpi-label">Dying</div></div>
-    <div class="kpi danger"><div class="kpi-value">${s.danger}</div><div class="kpi-label">KILL NOW</div></div>
-    <div class="kpi"><div class="kpi-value">$${Math.round(s.totalSpent)}</div><div class="kpi-label">Spent</div></div>
-    <div class="kpi"><div class="kpi-value">${s.totalPurchases}</div><div class="kpi-label">Sales</div></div>
-    <div class="kpi"><div class="kpi-value">$${s.avgCPA || '—'}</div><div class="kpi-label">Avg CPA</div></div>
-  `;
-}
-
-function renderKillBanner(killList) {
-  const banner = document.getElementById('killBanner');
-  const list = document.getElementById('killList');
-
-  if (!killList || killList.length === 0) {
-    banner.classList.remove('active');
-    return;
-  }
-
-  banner.classList.add('active');
-  list.innerHTML = killList.map(k => `
-    <div class="kill-item">
-      <div>
-        <div class="kill-item-name">${k.name}</div>
-        <div class="kill-item-reason">${k.reason}</div>
+    <div class="date-controls">
+      <div class="preset-btns">
+        <button class="preset-btn" data-preset="today" onclick="setPreset('today')">Today</button>
+        <button class="preset-btn active" data-preset="yesterday" onclick="setPreset('yesterday')">Yesterday</button>
+        <button class="preset-btn" data-preset="last_7d" onclick="setPreset('last_7d')">Last 7 Days</button>
+        <button class="preset-btn" data-preset="last_30d" onclick="setPreset('last_30d')">Last 30 Days</button>
       </div>
-      <button class="kill-btn" onclick="alert('Open Meta Ads Manager to pause: ${k.name}')">Pause</button>
-    </div>
-  `).join('');
-}
-
-function renderAds(ads) {
-  const list = document.getElementById('adList');
-  const filtered = currentFilter === 'all' ? ads : ads.filter(a => a.health === currentFilter);
-
-  if (filtered.length === 0) {
-    list.innerHTML = '<div class="loading">No ads in this category</div>';
-    return;
-  }
-
-  list.innerHTML = filtered.map(ad => {
-    const cpmBarColor = ad.cpmVsBaseline > 50 ? 'var(--red)' : ad.cpmVsBaseline > 20 ? 'var(--yellow)' : 'var(--green)';
-    const cpmBarWidth = ad.cpm ? Math.min((ad.cpm / 4) * 100, 100) : 0;
-
-    return `
-      <div class="ad-card ${ad.health}">
-        <div class="ad-header">
-          <div class="ad-name">${ad.name}</div>
-          <div class="ad-badge badge-${ad.health}">${ad.health}</div>
-        </div>
-        <div class="ad-meta">
-          <div class="meta-tag">${ad.status}</div>
-          ${ad.daysSinceLaunch ? `<div class="meta-tag">Day ${ad.daysSinceLaunch}</div>` : ''}
-          ${ad.campaign ? `<div class="meta-tag">${ad.campaign}</div>` : ''}
-        </div>
-        <div class="metrics">
-          <div class="metric">
-            <div class="metric-label">Sales</div>
-            <div class="metric-value ${ad.purchases > 0 ? 'good' : 'bad'}">${ad.purchases}</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">Spent</div>
-            <div class="metric-value">$${ad.spent.toFixed(2)}</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">CPA</div>
-            <div class="metric-value ${ad.cpa && ad.cpa < 12 ? 'good' : ad.cpa && ad.cpa > 20 ? 'bad' : 'warn'}">${ad.cpa ? '$' + ad.cpa : '—'}</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">CPM</div>
-            <div class="metric-value ${ad.cpm && ad.cpm > 2.5 ? 'bad' : ad.cpm && ad.cpm < 1.8 ? 'good' : 'warn'}">${ad.cpm ? '$' + ad.cpm : '—'}</div>
-            ${ad.cpm ? `<div class="cpm-bar"><div class="cpm-fill" style="width:${cpmBarWidth}%;background:${cpmBarColor}"></div></div>` : ''}
-          </div>
-          <div class="metric">
-            <div class="metric-label">Freq</div>
-            <div class="metric-value ${ad.frequency && ad.frequency > 2 ? 'bad' : 'warn'}">${ad.frequency || '—'}</div>
-          </div>
-          <div class="metric">
-            <div class="metric-label">CPM vs Base</div>
-            <div class="metric-value ${ad.cpmVsBaseline > 50 ? 'bad' : ad.cpmVsBaseline > 20 ? 'warn' : 'good'}">${ad.cpmVsBaseline !== null ? (ad.cpmVsBaseline > 0 ? '+' : '') + ad.cpmVsBaseline + '%' : '—'}</div>
-          </div>
-        </div>
-        <div class="action-strip">
-          <span class="action-text ${ad.health}">▸ ${ad.action}</span>
-          ${ad.freqChange !== null ? `<span style="font-size:11px;color:var(--muted)">Freq Δ ${ad.freqChange > 0 ? '+' : ''}${ad.freqChange}</span>` : ''}
-        </div>
+      <div class="date-divider"></div>
+      <div class="date-input-group">
+        <input type="date" id="startDate" />
+        <span>to</span>
+        <input type="date" id="endDate" />
+        <button class="apply-btn" onclick="applyCustomRange()">Apply</button>
       </div>
-    `;
-  }).join('');
-}
+      <div class="range-display" id="rangeDisplay">Yesterday</div>
+    </div>
 
-function filterAds(type) {
-  currentFilter = type;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
-  renderAds(allAds);
-}
+    <div id="app">
+      <div class="loading">Loading...</div>
+    </div>
 
-// Pull-to-refresh for mobile
-let startY = 0;
-document.addEventListener('touchstart', e => { startY = e.touches[0].clientY; });
-document.addEventListener('touchmove', e => {
-  if (window.scrollY === 0 && e.touches[0].clientY - startY > 80) {
-    document.getElementById('ptrIndicator').style.display = 'block';
-  }
-});
-document.addEventListener('touchend', e => {
-  if (window.scrollY === 0 && e.changedTouches[0].clientY - startY > 100) {
-    loadData();
-  }
-  document.getElementById('ptrIndicator').style.display = 'none';
-});
-</script>
+    <div class="last-updated" id="lastUpdated"></div>
+  </div>
+
+  <script>
+    let currentPreset = 'yesterday';
+    let customStart = null;
+    let customEnd = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const yesterday = getOffsetDate(-1);
+      document.getElementById('startDate').value = yesterday;
+      document.getElementById('endDate').value = yesterday;
+      loadData();
+    });
+
+    function getOffsetDate(offset) {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      return d.toISOString().split('T')[0];
+    }
+
+    function setPreset(preset) {
+      currentPreset = preset;
+      customStart = null;
+      customEnd = null;
+
+      document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelector(`[data-preset="${preset}"]`).classList.add('active');
+
+      const labels = {
+        today: 'Today',
+        yesterday: 'Yesterday',
+        last_7d: 'Last 7 Days',
+        last_30d: 'Last 30 Days'
+      };
+      document.getElementById('rangeDisplay').textContent = labels[preset] || preset;
+
+      loadData();
+    }
+
+    function applyCustomRange() {
+      const start = document.getElementById('startDate').value;
+      const end = document.getElementById('endDate').value;
+
+      if (!start || !end) {
+        alert('Please select both start and end dates');
+        return;
+      }
+      if (start > end) {
+        alert('Start date must be before end date');
+        return;
+      }
+
+      currentPreset = null;
+      customStart = start;
+      customEnd = end;
+
+      document.querySelectorAll('.preset-btn').forEach(btn => btn.classList.remove('active'));
+      document.getElementById('rangeDisplay').textContent = `${start} → ${end}`;
+
+      loadData();
+    }
+
+    async function loadData() {
+      const btn = document.getElementById('refreshBtn');
+      btn.classList.add('spinning');
+      const app = document.getElementById('app');
+      app.innerHTML = '<div class="loading">Pulling fresh data from Meta...</div>';
+
+      try {
+        let url = '/api/ads';
+        if (customStart && customEnd) {
+          url += `?start=${customStart}&end=${customEnd}`;
+        } else if (currentPreset) {
+          url += `?preset=${currentPreset}`;
+        }
+
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.error) {
+          throw new Error(typeof data.error === 'string' ? data.error : data.error.message || JSON.stringify(data.error));
+        }
+
+        render(data);
+      } catch (err) {
+        app.innerHTML = `
+          <div class="error-box">
+            <h3>🚨 Meta API Error</h3>
+            <p>${escapeHtml(err.message)}</p>
+            <p style="margin-top:12px;font-size:0.8rem">
+              <strong>Most likely cause:</strong> Access token expired.<br>
+              Generate a <strong>System User token</strong> in Business Manager — it never expires.
+            </p>
+          </div>
+        `;
+      } finally {
+        btn.classList.remove('spinning');
+      }
+    }
+
+    function render(data) {
+      const { summary, ads } = data;
+      const app = document.getElementById('app');
+
+      const summaryHTML = `
+        <div class="summary-grid">
+          <div class="card money">
+            <div class="card-value">$${summary.totalSpent}</div>
+            <div class="card-label">Total Spent</div>
+          </div>
+          <div class="card money">
+            <div class="card-value">$${summary.totalRevenue || '0.00'}</div>
+            <div class="card-label">Revenue</div>
+          </div>
+          <div class="card money">
+            <div class="card-value">${summary.totalPurchases}</div>
+            <div class="card-label">Purchases</div>
+          </div>
+          <div class="card money">
+            <div class="card-value">${summary.avgCPA || '—'}</div>
+            <div class="card-label">Avg CPA</div>
+          </div>
+          <div class="card money">
+            <div class="card-value">${summary.avgROAS || '—'}</div>
+            <div class="card-label">Avg ROAS</div>
+          </div>
+          <div class="card healthy">
+            <div class="card-value">${summary.healthy}</div>
+            <div class="card-label">Healthy</div>
+          </div>
+          <div class="card warning">
+            <div class="card-value">${summary.warning}</div>
+            <div class="card-label">Warning</div>
+          </div>
+          <div class="card dying">
+            <div class="card-value">${summary.dying}</div>
+            <div class="card-label">Dying</div>
+          </div>
+          <div class="card danger">
+            <div class="card-value">${summary.danger}</div>
+            <div class="card-label">Kill Now</div>
+          </div>
+          <div class="card dead">
+            <div class="card-value">${summary.dead}</div>
+            <div class="card-label">Dead</div>
+          </div>
+        </div>
+      `;
+
+      let killHTML = '';
+      if (summary.killList.length > 0) {
+        killHTML = `
+          <div class="kill-section">
+            <h2>🚨 KILL THESE ADS NOW</h2>
+            ${summary.killList.map(k => `
+              <div class="kill-item">
+                <span class="kill-item-name">${escapeHtml(k.name)}</span>
+                <span class="kill-item-reason">${escapeHtml(k.reason)}</span>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      const tableHTML = `
+        <div class="table-container">
+          <div class="table-header">
+            <div>Ad Set / Campaign</div>
+            <div>Status</div>
+            <div>Health</div>
+            <div>Spent</div>
+            <div>Purch</div>
+            <div>CPA</div>
+            <div>CPM</div>
+            <div>Freq</div>
+            <div>Action</div>
+          </div>
+          ${ads.map(ad => `
+            <div class="ad-row">
+              <div>
+                <div class="ad-name">${escapeHtml(ad.name)}</div>
+                <div class="ad-campaign">${escapeHtml(ad.campaign)}</div>
+              </div>
+              <div class="num">${ad.status}</div>
+              <div><span class="badge badge-${ad.health}">${ad.health}</span></div>
+              <div class="num">$${ad.spent.toFixed(2)}</div>
+              <div class="num">${ad.purchases}</div>
+              <div class="num">${ad.cpa ? '$' + ad.cpa : '—'}</div>
+              <div class="num ${ad.cpmVsBaseline > 0 ? 'num-neg' : 'num-pos'}">
+                ${ad.cpm ? '$' + ad.cpm : '—'}
+                ${ad.cpmVsBaseline !== null ? `(${ad.cpmVsBaseline > 0 ? '+' : ''}${ad.cpmVsBaseline}%)` : ''}
+              </div>
+              <div class="num ${ad.freqChange > 0.3 ? 'num-neg' : ''}">
+                ${ad.frequency || '—'}
+                ${ad.freqChange !== null ? `(${ad.freqChange > 0 ? '+' : ''}${ad.freqChange})` : ''}
+              </div>
+              <div style="font-size:0.8rem;font-weight:600;color:var(--${ad.health === 'danger' ? 'accent' : ad.health === 'warning' ? 'warning' : ad.health === 'healthy' ? 'success' : 'text-dim'})">
+                ${escapeHtml(ad.action)}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+      app.innerHTML = summaryHTML + killHTML + tableHTML;
+      document.getElementById('lastUpdated').textContent = `Last refresh: ${summary.lastRefresh} · Range: ${summary.dateRange || 'Yesterday'}`;
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  </script>
 </body>
 </html>
