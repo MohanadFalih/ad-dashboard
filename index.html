@@ -371,6 +371,7 @@
       h1 { font-size: 1.2rem; }
     }
   </style>
+<base target="_blank">
 </head>
 <body>
   <div class="container">
@@ -584,7 +585,18 @@
             <div>Freq</div>
             <div>Action</div>
           </div>
-          ${ads.map(ad => `
+          ${ads.map(ad => {
+            const cpmDisplay = ad.cpm ? `$${ad.cpm}` : '—';
+            const cpmPctDisplay = (ad.cpmVsBaseline !== null && ad.cpmVsBaseline !== undefined)
+              ? `(${ad.cpmVsBaseline > 0 ? '+' : ''}${ad.cpmVsBaseline}%)`
+              : '';
+            const freqDisplay = ad.frequency ? ad.frequency : '—';
+            const freqChangeDisplay = (ad.freqChange !== null && ad.freqChange !== undefined)
+              ? `(${ad.freqChange > 0 ? '+' : ''}${ad.freqChange})`
+              : '';
+            const actionColor = ad.health === 'danger' ? 'accent' : ad.health === 'warning' ? 'warning' : ad.health === 'healthy' ? 'success' : 'text-dim';
+
+            return `
             <div class="ad-row">
               <div>
                 <div class="ad-name">${escapeHtml(ad.name)}</div>
@@ -596,18 +608,16 @@
               <div class="num">${ad.purchases}</div>
               <div class="num">${ad.cpa ? '$' + ad.cpa : '—'}</div>
               <div class="num ${ad.cpmVsBaseline > 0 ? 'num-neg' : 'num-pos'}">
-                ${ad.cpm ? '$' + ad.cpm : '—'}
-                ${ad.cpmVsBaseline !== null ? `(${ad.cpmVsBaseline > 0 ? '+' : ''}${ad.cpmVsBaseline}%)` : ''}
+                ${cpmDisplay} ${cpmPctDisplay}
               </div>
               <div class="num ${ad.freqChange > 0.3 ? 'num-neg' : ''}">
-                ${ad.frequency || '—'}
-                ${ad.freqChange !== null ? `(${ad.freqChange > 0 ? '+' : ''}${ad.freqChange})` : ''}
+                ${freqDisplay} ${freqChangeDisplay}
               </div>
-              <div style="font-size:0.8rem;font-weight:600;color:var(--${ad.health === 'danger' ? 'accent' : ad.health === 'warning' ? 'warning' : ad.health === 'healthy' ? 'success' : 'text-dim'})">
+              <div style="font-size:0.8rem;font-weight:600;color:var(--${actionColor})">
                 ${escapeHtml(ad.action)}
               </div>
             </div>
-          `).join('')}
+          `}).join('')}
         </div>
       `;
 
