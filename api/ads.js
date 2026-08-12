@@ -39,35 +39,34 @@ export default async function handler(req, res) {
   try {
     // ── DATE RANGE LOGIC ──
     const { start, end, preset } = req.query;
-    let timeRange;
-    let datePreset;
+    let insightsParam;
     let rangeLabel;
 
     if (start && end) {
-      timeRange = { since: start, until: end };
+      // Custom range — apply to INSIGHTS field, not top-level
+      const timeRange = { since: start, until: end };
+      insightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(timeRange))}){spend,cpm,cpc,ctr,frequency,actions,action_values}`;
       rangeLabel = `${start} → ${end}`;
     } else if (preset) {
-      datePreset = preset;
+      // Preset — apply to INSIGHTS field
+      insightsParam = `insights.date_preset(${preset}){spend,cpm,cpc,ctr,frequency,actions,action_values}`;
       rangeLabel = preset;
     } else {
+      // Default: yesterday
       const since = getDateString(-1);
       const until = getDateString(-1);
-      timeRange = { since, until };
+      const timeRange = { since, until };
+      insightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(timeRange))}){spend,cpm,cpc,ctr,frequency,actions,action_values}`;
       rangeLabel = 'Yesterday';
     }
 
     // ── FETCH ADSETS ──
+    // Note: date range is applied to insights FIELD, not top-level query
+    // Top-level time_range only filters which adsets are returned, not their insight values
     let url = `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/adsets` +
-      `?fields=name,status,daily_budget,campaign{name},` +
-      `insights{spend,cpm,cpc,ctr,frequency,actions,action_values}`;
-
-    if (timeRange) {
-      url += `&time_range=${encodeURIComponent(JSON.stringify(timeRange))}`;
-    } else if (datePreset) {
-      url += `&date_preset=${datePreset}`;
-    }
-
-    url += `&access_token=${META_ACCESS_TOKEN}`;
+      `?fields=name,status,daily_budget,campaign{name},${insightsParam}` +
+      `&limit=500` +
+      `&access_token=${META_ACCESS_TOKEN}`;
 
     let metaRes = await fetch(url);
     let metaData = await metaRes.json();
@@ -93,14 +92,13 @@ export default async function handler(req, res) {
     // ── PROCESS ADSETS ──
     let ads = (metaData.data || []).map(adset => {
       const insights = adset.insights?.data?.[0] || {};
-      const prevInsights = adset.insights?.data?.[1] || {};
 
       const spent = parseFloat(insights.spend) || 0;
+      // Use fb_pixel_purchases to match Ads Manager "Purchases" column
       const purchases = parseInt(getActionCount(insights.actions, 'purchase')) || 0;
       const purchaseValue = parseFloat(getActionValue(insights.action_values, 'purchase')) || 0;
       const cpm = parseFloat(insights.cpm) || 0;
       const freq = parseFloat(insights.frequency) || 0;
-      const prevFreq = parseFloat(prevInsights.frequency) || 0;
       const cpa = purchases > 0 ? (spent / purchases).toFixed(2) : null;
       const roas = spent > 0 ? (purchaseValue / spent).toFixed(2) : null;
 
@@ -109,10 +107,7 @@ export default async function handler(req, res) {
         ? Math.round(((cpm - baseline) / baseline) * 100)
         : null;
 
-      const freqChange = prevFreq > 0 && freq > 0
-        ? parseFloat((freq - prevFreq).toFixed(2))
-        : null;
-
+      // Health scoring logic
       let health = 'healthy';
       let action = 'Let it run';
       let killReason = null;
@@ -141,9 +136,6 @@ export default async function handler(req, res) {
       } else if (cpmPct && cpmPct > 40) {
         health = 'warning';
         action = 'Watch — CPM rising';
-      } else if (freqChange && freqChange > 0.3) {
-        health = 'warning';
-        action = 'Watch — frequency spike';
       }
 
       return {
@@ -158,7 +150,6 @@ export default async function handler(req, res) {
         roas: roas ? parseFloat(roas) : null,
         cpm: cpm > 0 ? parseFloat(cpm.toFixed(2)) : null,
         frequency: freq > 0 ? parseFloat(freq.toFixed(2)) : null,
-        freqChange,
         baselineCPM: baseline,
         cpmVsBaseline: cpmPct,
         health,
@@ -222,21 +213,44 @@ function getDateString(offsetDays) {
 
 function getActionCount(actions, actionType) {
   if (!actions || !Array.isArray(actions)) return 0;
-  const act = actions.find(a => {
-    if (a.action_type === actionType) return true;
-    if (actionType === 'purchase' && a.action_type?.includes('purchase')) return true;
-    return false;
-  });
+
+  if (actionType === 'purchase') {
+    // Prefer fb_pixel_purchases — matches Ads Manager "Purchases" column
+    const pixelPurchase = actions.find(a =>
+      a.action_type === 'offsite_conversion.fb_pixel_purchases'
+    );
+    if (pixelPurchase) return parseInt(pixelPurchase.value) || 0;
+
+    // Fallback to generic purchase (often = "Results" / optimization event)
+    const purchase = actions.find(a => a.action_type === 'purchase');
+    if (purchase) return parseInt(purchase.value) || 0;
+
+    // Last resort
+    const anyPurchase = actions.find(a => a.action_type?.includes('purchase'));
+    return anyPurchase ? parseInt(anyPurchase.value) || 0 : 0;
+  }
+
+  const act = actions.find(a => a.action_type === actionType);
   return act ? parseInt(act.value) : 0;
 }
 
 function getActionValue(actionValues, actionType) {
   if (!actionValues || !Array.isArray(actionValues)) return 0;
-  const act = actionValues.find(a => {
-    if (a.action_type === actionType) return true;
-    if (actionType === 'purchase' && a.action_type?.includes('purchase')) return true;
-    return false;
-  });
+
+  if (actionType === 'purchase') {
+    const pixelPurchase = actionValues.find(a =>
+      a.action_type === 'offsite_conversion.fb_pixel_purchases'
+    );
+    if (pixelPurchase) return parseFloat(pixelPurchase.value) || 0;
+
+    const purchase = actionValues.find(a => a.action_type === 'purchase');
+    if (purchase) return parseFloat(purchase.value) || 0;
+
+    const anyPurchase = actionValues.find(a => a.action_type?.includes('purchase'));
+    return anyPurchase ? parseFloat(anyPurchase.value) || 0 : 0;
+  }
+
+  const act = actionValues.find(a => a.action_type === actionType);
   return act ? parseFloat(act.value) : 0;
 }
 
