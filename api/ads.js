@@ -44,15 +44,12 @@ export default async function handler(req, res) {
     let rangeLabel;
 
     if (start && end) {
-      // Custom range
       timeRange = { since: start, until: end };
       rangeLabel = `${start} → ${end}`;
     } else if (preset) {
-      // Preset mode
       datePreset = preset;
       rangeLabel = preset;
     } else {
-      // Default: yesterday
       const since = getDateString(-1);
       const until = getDateString(-1);
       timeRange = { since, until };
@@ -94,7 +91,7 @@ export default async function handler(req, res) {
     }
 
     // ── PROCESS ADSETS ──
-    const ads = (metaData.data || []).map(adset => {
+    let ads = (metaData.data || []).map(adset => {
       const insights = adset.insights?.data?.[0] || {};
       const prevInsights = adset.insights?.data?.[1] || {};
 
@@ -116,7 +113,6 @@ export default async function handler(req, res) {
         ? parseFloat((freq - prevFreq).toFixed(2))
         : null;
 
-      // Health scoring logic
       let health = 'healthy';
       let action = 'Let it run';
       let killReason = null;
@@ -171,6 +167,15 @@ export default async function handler(req, res) {
         daysSinceLaunch: estimateDays(adset.name),
         lastUpdated: new Date().toISOString()
       };
+    });
+
+    // ── SORT: ACTIVE FIRST, DEAD LAST ──
+    ads.sort((a, b) => {
+      const aDead = a.status === 'PAUSED' || a.status === 'OFF';
+      const bDead = b.status === 'PAUSED' || b.status === 'OFF';
+      if (aDead && !bDead) return 1;
+      if (!aDead && bDead) return -1;
+      return 0;
     });
 
     // ── SUMMARY ──
