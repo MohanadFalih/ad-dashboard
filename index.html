@@ -21,6 +21,8 @@
       --info: #1e90ff;
       --danger: #ff4757;
       --dead: #57606f;
+      --orange: #f59e0b;
+      --gray: #6b7280;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -183,8 +185,8 @@
 
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
       margin-bottom: 24px;
     }
 
@@ -192,7 +194,7 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 14px;
-      padding: 16px;
+      padding: 14px 10px;
       text-align: center;
       transition: transform 0.2s;
     }
@@ -200,13 +202,13 @@
     .card:hover { transform: translateY(-2px); }
 
     .card-value {
-      font-size: 1.6rem;
+      font-size: 1.4rem;
       font-weight: 700;
       margin-bottom: 4px;
     }
 
     .card-label {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: var(--text-dim);
       text-transform: uppercase;
       letter-spacing: 0.5px;
@@ -215,14 +217,20 @@
     .card.healthy { border-color: rgba(46, 213, 115, 0.3); }
     .card.healthy .card-value { color: var(--success); }
 
-    .card.warning { border-color: rgba(255, 165, 2, 0.3); }
-    .card.warning .card-value { color: var(--warning); }
+    .card.watch { border-color: rgba(255, 165, 2, 0.3); }
+    .card.watch .card-value { color: var(--warning); }
 
-    .card.danger { border-color: rgba(255, 71, 87, 0.3); }
-    .card.danger .card-value { color: var(--danger); }
+    .card.refresh { border-color: rgba(245, 158, 11, 0.3); }
+    .card.refresh .card-value { color: var(--orange); }
 
-    .card.dying { border-color: rgba(255, 165, 2, 0.2); }
-    .card.dying .card-value { color: var(--warning); }
+    .card.kill { border-color: rgba(255, 71, 87, 0.3); }
+    .card.kill .card-value { color: var(--danger); }
+
+    .card.review { border-color: rgba(107, 114, 128, 0.3); }
+    .card.review .card-value { color: var(--gray); }
+
+    .card.gathering { border-color: rgba(107, 114, 128, 0.3); }
+    .card.gathering .card-value { color: var(--gray); }
 
     .card.dead { border-color: rgba(87, 96, 111, 0.3); }
     .card.dead .card-value { color: var(--dead); }
@@ -307,12 +315,15 @@
       font-size: 0.7rem;
       font-weight: 600;
       text-transform: uppercase;
+      white-space: nowrap;
     }
 
     .badge-healthy { background: rgba(46, 213, 115, 0.15); color: var(--success); }
-    .badge-warning { background: rgba(255, 165, 2, 0.15); color: var(--warning); }
-    .badge-dying { background: rgba(255, 165, 2, 0.1); color: var(--warning); }
-    .badge-danger { background: rgba(255, 71, 87, 0.15); color: var(--danger); }
+    .badge-watch { background: rgba(255, 165, 2, 0.15); color: var(--warning); }
+    .badge-refresh_creative { background: rgba(245, 158, 11, 0.15); color: var(--orange); }
+    .badge-kill { background: rgba(255, 71, 87, 0.15); color: var(--danger); }
+    .badge-in_review { background: rgba(107, 114, 128, 0.15); color: var(--gray); }
+    .badge-gathering_data { background: rgba(107, 114, 128, 0.15); color: var(--gray); }
     .badge-dead { background: rgba(87, 96, 111, 0.15); color: var(--dead); }
 
     .num { font-family: 'SF Mono', Monaco, monospace; font-weight: 600; }
@@ -352,6 +363,13 @@
       margin-top: 20px;
     }
 
+    .health-note {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-top: 4px;
+      font-style: italic;
+    }
+
     @media (max-width: 900px) {
       .table-header, .ad-row {
         grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
@@ -371,6 +389,7 @@
       h1 { font-size: 1.2rem; }
     }
   </style>
+<base target="_blank">
 <base target="_blank">
 </head>
 <body>
@@ -512,6 +531,7 @@
       const { summary, ads } = data;
       const app = document.getElementById('app');
 
+      // ── SUMMARY CARDS (7 health states + 5 metrics) ──
       const summaryHTML = `
         <div class="summary-grid">
           <div class="card money">
@@ -535,30 +555,39 @@
             <div class="card-label">Avg ROAS</div>
           </div>
           <div class="card healthy">
-            <div class="card-value">${summary.healthy}</div>
+            <div class="card-value">${summary.healthy || 0}</div>
             <div class="card-label">Healthy</div>
           </div>
-          <div class="card warning">
-            <div class="card-value">${summary.warning}</div>
-            <div class="card-label">Warning</div>
+          <div class="card watch">
+            <div class="card-value">${summary.watch || 0}</div>
+            <div class="card-label">Watch</div>
           </div>
-          <div class="card dying">
-            <div class="card-value">${summary.dying}</div>
-            <div class="card-label">Dying</div>
+          <div class="card refresh">
+            <div class="card-value">${summary.refreshCreative || 0}</div>
+            <div class="card-label">Refresh Creative</div>
           </div>
-          <div class="card danger">
-            <div class="card-value">${summary.danger}</div>
+          <div class="card kill">
+            <div class="card-value">${summary.kill || 0}</div>
             <div class="card-label">Kill Now</div>
           </div>
+          <div class="card review">
+            <div class="card-value">${summary.inReview || 0}</div>
+            <div class="card-label">In Review</div>
+          </div>
+          <div class="card gathering">
+            <div class="card-value">${summary.gatheringData || 0}</div>
+            <div class="card-label">Gathering Data</div>
+          </div>
           <div class="card dead">
-            <div class="card-value">${summary.dead}</div>
+            <div class="card-value">${summary.dead || 0}</div>
             <div class="card-label">Dead</div>
           </div>
         </div>
       `;
 
+      // ── KILL SECTION ──
       let killHTML = '';
-      if (summary.killList.length > 0) {
+      if (summary.killList && summary.killList.length > 0) {
         killHTML = `
           <div class="kill-section">
             <h2>🚨 KILL THESE ADS NOW</h2>
@@ -572,6 +601,7 @@
         `;
       }
 
+      // ── TABLE ──
       const tableHTML = `
         <div class="table-container">
           <div class="table-header">
@@ -591,10 +621,23 @@
               ? `(${ad.cpmVsBaseline > 0 ? '+' : ''}${ad.cpmVsBaseline}%)`
               : '';
             const freqDisplay = ad.frequency ? ad.frequency : '—';
-            const freqChangeDisplay = (ad.freqChange !== null && ad.freqChange !== undefined)
-              ? `(${ad.freqChange > 0 ? '+' : ''}${ad.freqChange})`
+
+            // Action color based on health state
+            const actionColors = {
+              healthy: 'success',
+              watch: 'warning',
+              refresh_creative: 'orange',
+              kill: 'danger',
+              in_review: 'gray',
+              gathering_data: 'gray',
+              dead: 'dead'
+            };
+            const actionColor = actionColors[ad.health] || 'text-dim';
+
+            // Health note tooltip
+            const noteHTML = ad.healthNote
+              ? `<div class="health-note">${escapeHtml(ad.healthNote)}</div>`
               : '';
-            const actionColor = ad.health === 'danger' ? 'accent' : ad.health === 'warning' ? 'warning' : ad.health === 'healthy' ? 'success' : 'text-dim';
 
             return `
             <div class="ad-row">
@@ -603,16 +646,17 @@
                 <div class="ad-campaign">${escapeHtml(ad.campaign)}</div>
               </div>
               <div class="num">${ad.status}</div>
-              <div><span class="badge badge-${ad.health}">${ad.health}</span></div>
+              <div>
+                <span class="badge badge-${ad.health}">${formatHealthLabel(ad.health)}</span>
+                ${noteHTML}
+              </div>
               <div class="num">$${ad.spent.toFixed(2)}</div>
               <div class="num">${ad.purchases}</div>
               <div class="num">${ad.cpa ? '$' + ad.cpa : '—'}</div>
               <div class="num ${ad.cpmVsBaseline > 0 ? 'num-neg' : 'num-pos'}">
                 ${cpmDisplay} ${cpmPctDisplay}
               </div>
-              <div class="num ${ad.freqChange > 0.3 ? 'num-neg' : ''}">
-                ${freqDisplay} ${freqChangeDisplay}
-              </div>
+              <div class="num">${freqDisplay}</div>
               <div style="font-size:0.8rem;font-weight:600;color:var(--${actionColor})">
                 ${escapeHtml(ad.action)}
               </div>
@@ -622,7 +666,26 @@
       `;
 
       app.innerHTML = summaryHTML + killHTML + tableHTML;
-      document.getElementById('lastUpdated').textContent = `Last refresh: ${summary.lastRefresh} · Range: ${summary.dateRange || 'Yesterday'}`;
+
+      // Show both display range and health window
+      const healthInfo = summary.healthWindow
+        ? ` · Health window: ${summary.healthWindow}`
+        : '';
+      document.getElementById('lastUpdated').textContent =
+        `Last refresh: ${summary.lastRefresh} · Range: ${summary.dateRange || 'Yesterday'}${healthInfo}`;
+    }
+
+    function formatHealthLabel(health) {
+      const labels = {
+        healthy: 'Healthy',
+        watch: 'Watch',
+        refresh_creative: 'Refresh',
+        kill: 'Kill',
+        in_review: 'In Review',
+        gathering_data: 'Gathering',
+        dead: 'Dead'
+      };
+      return labels[health] || health;
     }
 
     function escapeHtml(text) {
