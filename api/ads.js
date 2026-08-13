@@ -1,7 +1,5 @@
-// api/ads.js — Vercel Serverless Function v2.1
-// Rewritten with 3-day rolling window, minimum data gates, and Deniz Moda business rules
-// TRUE CPA ceiling = $12. Meta-reported equivalents used for thresholds.
-// Default view: last 3 days (rolling). Single-day views available via query params for drill-down only.
+// api/ads.js — Vercel Serverless Function v2.2
+// 3-day rolling window, $40 kill gate, optional Odoo integration for true CPA
 
 const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 const AD_ACCOUNT_ID = process.env.AD_ACCOUNT_ID;
@@ -9,28 +7,27 @@ const BASELINE_CPM = JSON.parse(process.env.BASELINE_CPM || '{}');
 const META_APP_ID = process.env.META_APP_ID || null;
 const META_APP_SECRET = process.env.META_APP_SECRET || null;
 
+// ── ODOO CONFIG (optional) ──
+const ODOO_URL = process.env.ODOO_URL || null;       // e.g. https://deniz-moda.odoo.sh
+const ODOO_DB = process.env.ODOO_DB || null;
+const ODOO_USER = process.env.ODOO_USER || null;     // email
+const ODOO_API_KEY = process.env.ODOO_API_KEY || null;
+
 // ── DENIZ MODA BUSINESS CONFIG ──
-// Meta captures ~71% of purchases (chat-based orders).
-// True CPA target = $10 (profitable sweet spot). True CPA ceiling = $12 (MAX acceptable).
-// True CPA kill = $15 (clearly unprofitable).
-// Meta-reported equivalents: $10÷0.71=$14.08 | $12÷0.71=$16.90 | $15÷0.71=$21.13
-const TARGET_CPA = parseFloat(process.env.TARGET_CPA) || 14.08;      // Meta-reported healthy target
+const TARGET_CPA = parseFloat(process.env.TARGET_CPA) || 14.08;
 const TARGET_ROAS = parseFloat(process.env.TARGET_ROAS) || 4.0;
-const MIN_SPEND_FOR_CLASSIFICATION = 20;   // $20 in 3 days to get a health label
+const MIN_SPEND_FOR_CLASSIFICATION = 20;
 const MIN_IMPRESSIONS_FOR_CLASSIFICATION = 1000;
-const MIN_SPEND_FOR_KILL = 50;             // $50 in 3 days before "kill" is allowed
+const MIN_SPEND_FOR_KILL = 40;                       // ← lowered from 50 to 40
 const MAX_FREQ_FOR_HEALTHY = 2.5;
 const MAX_FREQ_FOR_WATCH = 3.5;
-const CPM_WATCH_THRESHOLD = 40;            // +40% above baseline
-const CPM_ELEVATED_THRESHOLD = 80;         // +80% above baseline
+const CPM_WATCH_THRESHOLD = 40;
+const CPM_ELEVATED_THRESHOLD = 80;
 
-// ── CPA THRESHOLDS (Meta-reported) ──
-// These map to true CPA: $14.08=$10 | $16.90=$12 | $21.13=$15
-const CPA_WATCH_THRESHOLD = TARGET_CPA;                    // > $14.08 meta = true > $10
-const CPA_CEILING_THRESHOLD = TARGET_CPA * 1.2;             // > $16.90 meta = true > $12 (MAX)
-const CPA_KILL_THRESHOLD = TARGET_CPA * 1.5;                // > $21.13 meta = true > $15
+const CPA_WATCH_THRESHOLD = TARGET_CPA;
+const CPA_CEILING_THRESHOLD = TARGET_CPA * 1.2;
+const CPA_KILL_THRESHOLD = TARGET_CPA * 1.5;
 
-// Baseline CPMs from your current sheet
 const defaultBaselines = {
   "5 AUG H-1840": 1.46,
   "2 AUG T-7071": 1.28,
@@ -65,13 +62,11 @@ export default async function handler(req, res) {
     let rangeLabel;
     let healthInsightsParam;
 
-    // HEALTH DATA: always pull last 3 days for classification
     const healthSince = getDateString(-2);
     const healthUntil = getDateString(0);
     const healthTimeRange = { since: healthSince, until: healthUntil };
     healthInsightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(healthTimeRange))}){spend,impressions,cpm,cpc,ctr,frequency,actions,action_values}`;
 
-    // DISPLAY DATA: user-selected range (defaults to same 3-day window)
     if (start && end) {
       const timeRange = { since: start, until: end };
       displayInsightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(timeRange))}){spend,impressions,cpm,cpc,ctr,frequency,actions,action_values}`;
@@ -80,7 +75,6 @@ export default async function handler(req, res) {
       displayInsightsParam = `insights.date_preset(${preset}){spend,impressions,cpm,cpc,ctr,frequency,actions,action_values}`;
       rangeLabel = preset;
     } else {
-      // Default: last 3 days (rolling window)
       const since = getDateString(-2);
       const until = getDateString(0);
       const timeRange = { since, until };
@@ -88,7 +82,7 @@ export default async function handler(req, res) {
       rangeLabel = 'Last 3 days';
     }
 
-    // ── FETCH ADSETS (display range) ──
+    // ── FETCH META ADSETS ──
     let displayUrl = `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/adsets` +
       `?fields=name,status,daily_budget,effective_status,campaign{name},${displayInsightsParam}` +
       `&limit=500` +
@@ -97,7 +91,6 @@ export default async function handler(req, res) {
     let displayRes = await fetch(displayUrl);
     let displayData = await displayRes.json();
 
-    // Token refresh fallback
     if (displayData.error && displayData.error.code === 190) {
       const refreshed = await refreshToken(META_ACCESS_TOKEN);
       if (refreshed) {
@@ -114,7 +107,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ── FETCH ADSETS (health range — last 3 days) ──
+    // ── FETCH HEALTH DATA (3-day) ──
     let healthData = displayData;
     const isHealthSameAsDisplay = (!start && !end && !preset) ||
       (preset === 'last_3d') ||
@@ -139,19 +132,28 @@ export default async function handler(req, res) {
       }
     }
 
-    // Build a map of health insights by adset ID
     const healthMap = {};
     (healthData.data || []).forEach(adset => {
       const insights = adset.insights?.data?.[0] || {};
       healthMap[adset.id] = insights;
     });
 
+    // ── FETCH ODOO DATA (optional) ──
+    let odooData = null;
+    if (ODOO_URL && ODOO_DB && ODOO_USER && ODOO_API_KEY) {
+      try {
+        odooData = await fetchOdooData(healthSince, healthUntil);
+      } catch (e) {
+        console.error('Odoo fetch failed:', e.message);
+      }
+    }
+
     // ── PROCESS ADSETS ──
     let ads = (displayData.data || []).map(adset => {
       const displayInsights = adset.insights?.data?.[0] || {};
       const healthInsights = healthMap[adset.id] || displayInsights;
 
-      // ── DISPLAY METRICS (from user-selected range) ──
+      // Display metrics
       const dispSpent = parseFloat(displayInsights.spend) || 0;
       const dispImpressions = parseInt(displayInsights.impressions) || 0;
       const dispPurchases = parseInt(getActionCount(displayInsights.actions, 'purchase')) || 0;
@@ -161,7 +163,7 @@ export default async function handler(req, res) {
       const dispCpa = dispPurchases > 0 ? (dispSpent / dispPurchases).toFixed(2) : null;
       const dispRoas = dispSpent > 0 ? (dispPurchaseValue / dispSpent).toFixed(2) : null;
 
-      // ── HEALTH METRICS (from 3-day rolling window) ──
+      // Health metrics
       const hSpent = parseFloat(healthInsights.spend) || 0;
       const hImpressions = parseInt(healthInsights.impressions) || 0;
       const hPurchases = parseInt(getActionCount(healthInsights.actions, 'purchase')) || 0;
@@ -178,18 +180,35 @@ export default async function handler(req, res) {
 
       const daysSinceLaunch = estimateDays(adset.name);
 
-      // ── HEALTH CLASSIFICATION (v2.1 logic) ──
+      // ── ODOO MATCHING ──
+      const modelCode = extractModelCode(adset.name);
+      let odooOrders = 0;
+      let odooRevenue = 0;
+      let odooTrend = null;
+      let trueCpa = null;
+
+      if (odooData && modelCode) {
+        const match = odooData.byModel[modelCode];
+        if (match) {
+          odooOrders = match.totalOrders;
+          odooRevenue = match.totalRevenue;
+          odooTrend = match.trend; // 'rising', 'falling', 'stable', 'peak_then_drop'
+          if (hSpent > 0 && odooOrders > 0) {
+            trueCpa = hSpent / odooOrders;
+          }
+        }
+      }
+
+      // ── HEALTH CLASSIFICATION ──
       let health = 'healthy';
       let action = 'Let it run';
       let killReason = null;
       let healthNote = null;
 
-      // 1. Dead / paused
       if (adset.status === 'PAUSED' || adset.status === 'OFF') {
         health = 'dead';
         action = 'Already killed';
       }
-      // 2. In review / not yet started
       else if (adset.effective_status === 'PENDING_REVIEW' || adset.effective_status === 'PENDING_BILLING_INITIAL') {
         health = 'in_review';
         action = 'In review — wait for approval';
@@ -198,16 +217,21 @@ export default async function handler(req, res) {
         health = 'in_review';
         action = 'Just launched — waiting for first spend';
       }
-      // 3. Not enough data to classify
       else if (hSpent < MIN_SPEND_FOR_CLASSIFICATION || hImpressions < MIN_IMPRESSIONS_FOR_CLASSIFICATION) {
         health = 'gathering_data';
         action = 'Gathering data — check back tomorrow';
         healthNote = `$${hSpent.toFixed(2)} spent, ${hImpressions} impressions (need $${MIN_SPEND_FOR_CLASSIFICATION}+ and ${MIN_IMPRESSIONS_FOR_CLASSIFICATION}+)`;
       }
-      // 4. Full classification with 3-day data
       else {
-        // ── KILL checks (strictest — requires sufficient spend) ──
-        if (hSpent >= MIN_SPEND_FOR_KILL && hPurchases === 0) {
+        // ── ODOO TREND OVERRIDE ──
+        // If Odoo shows peak-then-drop, downgrade to refresh creative
+        if (odooTrend === 'peak_then_drop' && health !== 'kill') {
+          health = 'refresh_creative';
+          action = 'REFRESH CREATIVE — Odoo orders peaked then dropped';
+          healthNote = `Odoo: ${odooOrders} orders, trend: peak then drop. Meta may have algorithmic fatigue.`;
+        }
+        // ── KILL checks ──
+        else if (hSpent >= MIN_SPEND_FOR_KILL && hPurchases === 0) {
           health = 'kill';
           action = 'KILL — No conversions after significant spend';
           killReason = `$${hSpent.toFixed(0)} spent, 0 purchases in 3 days`;
@@ -217,7 +241,7 @@ export default async function handler(req, res) {
           action = 'KILL — CPA too high over 3 days';
           killReason = `3-day CPA $${hCpa.toFixed(2)} > $${CPA_KILL_THRESHOLD.toFixed(2)} (true CPA > $15)`;
         }
-        // ── REFRESH CREATIVE (frequency exhaustion — NOT kill) ──
+        // ── REFRESH CREATIVE (frequency) ──
         else if (hFreq >= MAX_FREQ_FOR_WATCH) {
           health = 'refresh_creative';
           action = 'REFRESH CREATIVE — Swap image/video + hook';
@@ -262,7 +286,7 @@ export default async function handler(req, res) {
         status: adset.status,
         effectiveStatus: adset.effective_status,
         campaign: adset.campaign?.name || '',
-        // Display metrics (from selected range)
+        // Display
         spent: dispSpent,
         impressions: dispImpressions,
         purchases: dispPurchases,
@@ -271,7 +295,7 @@ export default async function handler(req, res) {
         roas: dispRoas ? parseFloat(dispRoas) : null,
         cpm: dispCpm > 0 ? parseFloat(dispCpm.toFixed(2)) : null,
         frequency: dispFreq > 0 ? parseFloat(dispFreq.toFixed(2)) : null,
-        // Health metrics (from 3-day window)
+        // Health
         healthSpent: hSpent,
         healthImpressions: hImpressions,
         healthPurchases: hPurchases,
@@ -279,6 +303,12 @@ export default async function handler(req, res) {
         healthRoas: hRoas ? parseFloat(hRoas.toFixed(2)) : null,
         healthCpm: hCpm > 0 ? parseFloat(hCpm.toFixed(2)) : null,
         healthFrequency: hFreq > 0 ? parseFloat(hFreq.toFixed(2)) : null,
+        // Odoo
+        modelCode,
+        odooOrders,
+        odooRevenue: odooRevenue > 0 ? parseFloat(odooRevenue.toFixed(2)) : null,
+        odooTrend,
+        trueCpa: trueCpa ? parseFloat(trueCpa.toFixed(2)) : null,
         // Classification
         baselineCPM: baseline,
         cpmVsBaseline: cpmPct,
@@ -291,7 +321,6 @@ export default async function handler(req, res) {
       };
     });
 
-    // ── SORT: ACTIVE FIRST, DEAD LAST ──
     ads.sort((a, b) => {
       const aDead = a.status === 'PAUSED' || a.status === 'OFF';
       const bDead = b.status === 'PAUSED' || b.status === 'OFF';
@@ -300,7 +329,6 @@ export default async function handler(req, res) {
       return 0;
     });
 
-    // ── SUMMARY ──
     const activeAds = ads.filter(a => a.status !== 'PAUSED' && a.status !== 'OFF');
     const killList = ads.filter(a => a.health === 'kill');
 
@@ -329,6 +357,7 @@ export default async function handler(req, res) {
       targetCPA: TARGET_CPA,
       targetROAS: TARGET_ROAS,
       trueCPACeiling: 12.00,
+      odooConnected: !!odooData,
       lastRefresh: new Date().toLocaleString()
     };
 
@@ -338,6 +367,212 @@ export default async function handler(req, res) {
     console.error(err);
     return res.status(500).json({ error: err.message, stack: err.stack });
   }
+}
+
+// ── ODOO INTEGRATION ──
+
+async function fetchOdooData(since, until) {
+  // Step 1: Authenticate
+  const authRes = await fetch(`${ODOO_URL}/jsonrpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        service: 'common',
+        method: 'authenticate',
+        args: [ODOO_DB, ODOO_USER, ODOO_API_KEY, {}]
+      },
+      id: 1
+    })
+  });
+
+  const authData = await authRes.json();
+  const uid = authData.result;
+  if (!uid) throw new Error('Odoo authentication failed');
+
+  // Step 2: Fetch confirmed sales orders in date range
+  const orderRes = await fetch(`${ODOO_URL}/jsonrpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        service: 'object',
+        method: 'execute_kw',
+        args: [
+          ODOO_DB, uid, ODOO_API_KEY,
+          'sale.order',
+          'search_read',
+          [
+            [
+              ['state', 'in', ['sale', 'done']],
+              ['date_order', '>=', `${since} 00:00:00`],
+              ['date_order', '<=', `${until} 23:59:59`]
+            ]
+          ],
+          { fields: ['id', 'name', 'date_order', 'amount_total', 'order_line'] }
+        ]
+      },
+      id: 2
+    })
+  });
+
+  const orderData = await orderRes.json();
+  const orders = orderData.result || [];
+
+  // Step 3: Fetch order lines to get products
+  const lineIds = orders.flatMap(o => o.order_line || []);
+  const lineRes = await fetch(`${ODOO_URL}/jsonrpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        service: 'object',
+        method: 'execute_kw',
+        args: [
+          ODOO_DB, uid, ODOO_API_KEY,
+          'sale.order.line',
+          'read',
+          [lineIds],
+          { fields: ['product_id', 'price_unit', 'product_uom_qty'] }
+        ]
+      },
+      id: 3
+    })
+  });
+
+  const lineData = await lineRes.json();
+  const lines = lineData.result || [];
+
+  // Step 4: Fetch product names to match with ad set model codes
+  const productIds = [...new Set(lines.map(l => l.product_id?.[0]).filter(Boolean))];
+  const productRes = await fetch(`${ODOO_URL}/jsonrpc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        service: 'object',
+        method: 'execute_kw',
+        args: [
+          ODOO_DB, uid, ODOO_API_KEY,
+          'product.product',
+          'read',
+          [productIds],
+          { fields: ['id', 'name', 'default_code'] }
+        ]
+      },
+      id: 4
+    })
+  });
+
+  const productData = await productRes.json();
+  const products = productData.result || [];
+  const productMap = {};
+  products.forEach(p => {
+    productMap[p.id] = p;
+  });
+
+  // Step 5: Group by model code and calculate trends
+  const byModel = {};
+  const byDate = {};
+
+  orders.forEach(order => {
+    const orderDate = order.date_order.split(' ')[0];
+    const orderLines = lines.filter(l => (order.order_line || []).includes(l.id));
+
+    orderLines.forEach(line => {
+      const product = productMap[line.product_id?.[0]];
+      if (!product) return;
+
+      const modelCode = extractModelFromProduct(product.name, product.default_code);
+      if (!modelCode) return;
+
+      if (!byModel[modelCode]) {
+        byModel[modelCode] = { totalOrders: 0, totalRevenue: 0, daily: {} };
+      }
+
+      byModel[modelCode].totalOrders += 1;
+      byModel[modelCode].totalRevenue += (line.price_unit * line.product_uom_qty);
+
+      if (!byModel[modelCode].daily[orderDate]) {
+        byModel[modelCode].daily[orderDate] = 0;
+      }
+      byModel[modelCode].daily[orderDate] += 1;
+    });
+  });
+
+  // Calculate trends
+  Object.keys(byModel).forEach(modelCode => {
+    const daily = byModel[modelCode].daily;
+    const dates = Object.keys(daily).sort();
+
+    if (dates.length >= 3) {
+      const first = daily[dates[0]];
+      const mid = daily[dates[Math.floor(dates.length / 2)]];
+      const last = daily[dates[dates.length - 1]];
+
+      if (mid > first * 2 && last < mid * 0.5) {
+        byModel[modelCode].trend = 'peak_then_drop';
+      } else if (last > mid) {
+        byModel[modelCode].trend = 'rising';
+      } else if (last < mid * 0.7) {
+        byModel[modelCode].trend = 'falling';
+      } else {
+        byModel[modelCode].trend = 'stable';
+      }
+    } else if (dates.length === 2) {
+      const first = daily[dates[0]];
+      const last = daily[dates[1]];
+      if (last < first * 0.5) {
+        byModel[modelCode].trend = 'falling';
+      } else if (last > first * 1.5) {
+        byModel[modelCode].trend = 'rising';
+      } else {
+        byModel[modelCode].trend = 'stable';
+      }
+    } else {
+      byModel[modelCode].trend = 'stable';
+    }
+  });
+
+  return { byModel, totalOrders: orders.length };
+}
+
+function extractModelCode(adSetName) {
+  // Extract model codes like H-1869, T-7054, K-6494, L-4114
+  const match = adSetName.match(/([A-Z])[-\s]?(\d{3,4})/i);
+  if (match) {
+    return `${match[1].toUpperCase()}-${match[2]}`;
+  }
+  // Also match "KOLIK", "TAFETTA" etc.
+  const nameMatch = adSetName.match(/(KOLIK|TAFETTA)/i);
+  if (nameMatch) {
+    return nameMatch[1].toUpperCase();
+  }
+  return null;
+}
+
+function extractModelFromProduct(productName, defaultCode) {
+  // Try default_code first (e.g., "H-1869")
+  if (defaultCode) {
+    const match = defaultCode.match(/([A-Z])[-\s]?(\d{3,4})/i);
+    if (match) return `${match[1].toUpperCase()}-${match[2]}`;
+  }
+  // Try product name
+  if (productName) {
+    const match = productName.match(/([A-Z])[-\s]?(\d{3,4})/i);
+    if (match) return `${match[1].toUpperCase()}-${match[2]}`;
+    const nameMatch = productName.match(/(KOLIK|TAFETTA)/i);
+    if (nameMatch) return nameMatch[1].toUpperCase();
+  }
+  return null;
 }
 
 // ── HELPERS ──
@@ -350,40 +585,28 @@ function getDateString(offsetDays) {
 
 function getActionCount(actions, actionType) {
   if (!actions || !Array.isArray(actions)) return 0;
-
   if (actionType === 'purchase') {
-    const pixelPurchase = actions.find(a =>
-      a.action_type === 'offsite_conversion.fb_pixel_purchases'
-    );
+    const pixelPurchase = actions.find(a => a.action_type === 'offsite_conversion.fb_pixel_purchases');
     if (pixelPurchase) return parseInt(pixelPurchase.value) || 0;
-
     const purchase = actions.find(a => a.action_type === 'purchase');
     if (purchase) return parseInt(purchase.value) || 0;
-
     const anyPurchase = actions.find(a => a.action_type?.includes('purchase'));
     return anyPurchase ? parseInt(anyPurchase.value) || 0 : 0;
   }
-
   const act = actions.find(a => a.action_type === actionType);
   return act ? parseInt(act.value) : 0;
 }
 
 function getActionValue(actionValues, actionType) {
   if (!actionValues || !Array.isArray(actionValues)) return 0;
-
   if (actionType === 'purchase') {
-    const pixelPurchase = actionValues.find(a =>
-      a.action_type === 'offsite_conversion.fb_pixel_purchases'
-    );
+    const pixelPurchase = actionValues.find(a => a.action_type === 'offsite_conversion.fb_pixel_purchases');
     if (pixelPurchase) return parseFloat(pixelPurchase.value) || 0;
-
     const purchase = actionValues.find(a => a.action_type === 'purchase');
     if (purchase) return parseFloat(purchase.value) || 0;
-
     const anyPurchase = actionValues.find(a => a.action_type?.includes('purchase'));
     return anyPurchase ? parseFloat(anyPurchase.value) || 0 : 0;
   }
-
   const act = actionValues.find(a => a.action_type === actionType);
   return act ? parseFloat(act.value) : 0;
 }
