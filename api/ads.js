@@ -1,12 +1,34 @@
-// api/ads.js — Vercel Serverless Function
-// Pulls Meta Ads data, calculates health, returns JSON
-// Supports ?start=YYYY-MM-DD&end=YYYY-MM-DD or preset query params
+// api/ads.js — Vercel Serverless Function v2.1
+// Rewritten with 3-day rolling window, minimum data gates, and Deniz Moda business rules
+// TRUE CPA ceiling = $12. Meta-reported equivalents used for thresholds.
+// Default view: last 3 days (rolling). Single-day views available via query params for drill-down only.
 
 const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 const AD_ACCOUNT_ID = process.env.AD_ACCOUNT_ID;
 const BASELINE_CPM = JSON.parse(process.env.BASELINE_CPM || '{}');
 const META_APP_ID = process.env.META_APP_ID || null;
 const META_APP_SECRET = process.env.META_APP_SECRET || null;
+
+// ── DENIZ MODA BUSINESS CONFIG ──
+// Meta captures ~71% of purchases (chat-based orders).
+// True CPA target = $10 (profitable sweet spot). True CPA ceiling = $12 (MAX acceptable).
+// True CPA kill = $15 (clearly unprofitable).
+// Meta-reported equivalents: $10÷0.71=$14.08 | $12÷0.71=$16.90 | $15÷0.71=$21.13
+const TARGET_CPA = parseFloat(process.env.TARGET_CPA) || 14.08;      // Meta-reported healthy target
+const TARGET_ROAS = parseFloat(process.env.TARGET_ROAS) || 4.0;
+const MIN_SPEND_FOR_CLASSIFICATION = 20;   // $20 in 3 days to get a health label
+const MIN_IMPRESSIONS_FOR_CLASSIFICATION = 1000;
+const MIN_SPEND_FOR_KILL = 50;             // $50 in 3 days before "kill" is allowed
+const MAX_FREQ_FOR_HEALTHY = 2.5;
+const MAX_FREQ_FOR_WATCH = 3.5;
+const CPM_WATCH_THRESHOLD = 40;            // +40% above baseline
+const CPM_ELEVATED_THRESHOLD = 80;         // +80% above baseline
+
+// ── CPA THRESHOLDS (Meta-reported) ──
+// These map to true CPA: $14.08=$10 | $16.90=$12 | $21.13=$15
+const CPA_WATCH_THRESHOLD = TARGET_CPA;                    // > $14.08 meta = true > $10
+const CPA_CEILING_THRESHOLD = TARGET_CPA * 1.2;             // > $16.90 meta = true > $12 (MAX)
+const CPA_KILL_THRESHOLD = TARGET_CPA * 1.5;                // > $21.13 meta = true > $15
 
 // Baseline CPMs from your current sheet
 const defaultBaselines = {
@@ -39,123 +61,232 @@ export default async function handler(req, res) {
   try {
     // ── DATE RANGE LOGIC ──
     const { start, end, preset } = req.query;
-    let insightsParam;
+    let displayInsightsParam;
     let rangeLabel;
+    let healthInsightsParam;
 
+    // HEALTH DATA: always pull last 3 days for classification
+    const healthSince = getDateString(-2);
+    const healthUntil = getDateString(0);
+    const healthTimeRange = { since: healthSince, until: healthUntil };
+    healthInsightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(healthTimeRange))}){spend,impressions,cpm,cpc,ctr,frequency,actions,action_values}`;
+
+    // DISPLAY DATA: user-selected range (defaults to same 3-day window)
     if (start && end) {
-      // Custom range — apply to INSIGHTS field, not top-level
       const timeRange = { since: start, until: end };
-      insightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(timeRange))}){spend,cpm,cpc,ctr,frequency,actions,action_values}`;
+      displayInsightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(timeRange))}){spend,impressions,cpm,cpc,ctr,frequency,actions,action_values}`;
       rangeLabel = `${start} → ${end}`;
     } else if (preset) {
-      // Preset — apply to INSIGHTS field
-      insightsParam = `insights.date_preset(${preset}){spend,cpm,cpc,ctr,frequency,actions,action_values}`;
+      displayInsightsParam = `insights.date_preset(${preset}){spend,impressions,cpm,cpc,ctr,frequency,actions,action_values}`;
       rangeLabel = preset;
     } else {
-      // Default: yesterday
-      const since = getDateString(-1);
-      const until = getDateString(-1);
+      // Default: last 3 days (rolling window)
+      const since = getDateString(-2);
+      const until = getDateString(0);
       const timeRange = { since, until };
-      insightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(timeRange))}){spend,cpm,cpc,ctr,frequency,actions,action_values}`;
-      rangeLabel = 'Yesterday';
+      displayInsightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify(timeRange))}){spend,impressions,cpm,cpc,ctr,frequency,actions,action_values}`;
+      rangeLabel = 'Last 3 days';
     }
 
-    // ── FETCH ADSETS ──
-    // Note: date range is applied to insights FIELD, not top-level query
-    // Top-level time_range only filters which adsets are returned, not their insight values
-    let url = `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/adsets` +
-      `?fields=name,status,daily_budget,campaign{name},${insightsParam}` +
+    // ── FETCH ADSETS (display range) ──
+    let displayUrl = `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/adsets` +
+      `?fields=name,status,daily_budget,effective_status,campaign{name},${displayInsightsParam}` +
       `&limit=500` +
       `&access_token=${META_ACCESS_TOKEN}`;
 
-    let metaRes = await fetch(url);
-    let metaData = await metaRes.json();
+    let displayRes = await fetch(displayUrl);
+    let displayData = await displayRes.json();
 
-    // ── TOKEN REFRESH FALLBACK ──
-    if (metaData.error && metaData.error.code === 190) {
-      console.log('Token expired, attempting refresh...');
+    // Token refresh fallback
+    if (displayData.error && displayData.error.code === 190) {
       const refreshed = await refreshToken(META_ACCESS_TOKEN);
       if (refreshed) {
-        url = url.replace(/access_token=[^&]+/, `access_token=${refreshed}`);
-        metaRes = await fetch(url);
-        metaData = await metaRes.json();
+        displayUrl = displayUrl.replace(/access_token=[^&]+/, `access_token=${refreshed}`);
+        displayRes = await fetch(displayUrl);
+        displayData = await displayRes.json();
       }
     }
 
-    if (metaData.error) {
+    if (displayData.error) {
       return res.status(400).json({
-        error: metaData.error,
+        error: displayData.error,
         hint: 'If token expired, generate a System User token in Business Manager (never expires)'
       });
     }
 
-    // ── PROCESS ADSETS ──
-    let ads = (metaData.data || []).map(adset => {
-      const insights = adset.insights?.data?.[0] || {};
+    // ── FETCH ADSETS (health range — last 3 days) ──
+    let healthData = displayData;
+    const isHealthSameAsDisplay = (!start && !end && !preset) ||
+      (preset === 'last_3d') ||
+      (start === healthSince && end === healthUntil);
 
-      const spent = parseFloat(insights.spend) || 0;
-      // Use fb_pixel_purchases to match Ads Manager "Purchases" column
-      const purchases = parseInt(getActionCount(insights.actions, 'purchase')) || 0;
-      const purchaseValue = parseFloat(getActionValue(insights.action_values, 'purchase')) || 0;
-      const cpm = parseFloat(insights.cpm) || 0;
-      const freq = parseFloat(insights.frequency) || 0;
-      const cpa = purchases > 0 ? (spent / purchases).toFixed(2) : null;
-      const roas = spent > 0 ? (purchaseValue / spent).toFixed(2) : null;
+    if (!isHealthSameAsDisplay) {
+      let healthUrl = `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/adsets` +
+        `?fields=name,status,effective_status,campaign{name},${healthInsightsParam}` +
+        `&limit=500` +
+        `&access_token=${META_ACCESS_TOKEN}`;
+
+      let healthRes = await fetch(healthUrl);
+      healthData = await healthRes.json();
+
+      if (healthData.error && healthData.error.code === 190) {
+        const refreshed = await refreshToken(META_ACCESS_TOKEN);
+        if (refreshed) {
+          healthUrl = healthUrl.replace(/access_token=[^&]+/, `access_token=${refreshed}`);
+          healthRes = await fetch(healthUrl);
+          healthData = await healthRes.json();
+        }
+      }
+    }
+
+    // Build a map of health insights by adset ID
+    const healthMap = {};
+    (healthData.data || []).forEach(adset => {
+      const insights = adset.insights?.data?.[0] || {};
+      healthMap[adset.id] = insights;
+    });
+
+    // ── PROCESS ADSETS ──
+    let ads = (displayData.data || []).map(adset => {
+      const displayInsights = adset.insights?.data?.[0] || {};
+      const healthInsights = healthMap[adset.id] || displayInsights;
+
+      // ── DISPLAY METRICS (from user-selected range) ──
+      const dispSpent = parseFloat(displayInsights.spend) || 0;
+      const dispImpressions = parseInt(displayInsights.impressions) || 0;
+      const dispPurchases = parseInt(getActionCount(displayInsights.actions, 'purchase')) || 0;
+      const dispPurchaseValue = parseFloat(getActionValue(displayInsights.action_values, 'purchase')) || 0;
+      const dispCpm = parseFloat(displayInsights.cpm) || 0;
+      const dispFreq = parseFloat(displayInsights.frequency) || 0;
+      const dispCpa = dispPurchases > 0 ? (dispSpent / dispPurchases).toFixed(2) : null;
+      const dispRoas = dispSpent > 0 ? (dispPurchaseValue / dispSpent).toFixed(2) : null;
+
+      // ── HEALTH METRICS (from 3-day rolling window) ──
+      const hSpent = parseFloat(healthInsights.spend) || 0;
+      const hImpressions = parseInt(healthInsights.impressions) || 0;
+      const hPurchases = parseInt(getActionCount(healthInsights.actions, 'purchase')) || 0;
+      const hPurchaseValue = parseFloat(getActionValue(healthInsights.action_values, 'purchase')) || 0;
+      const hCpm = parseFloat(healthInsights.cpm) || 0;
+      const hFreq = parseFloat(healthInsights.frequency) || 0;
+      const hCpa = hPurchases > 0 ? (hSpent / hPurchases) : null;
+      const hRoas = hSpent > 0 ? (hPurchaseValue / hSpent) : null;
 
       const baseline = baselines[adset.name] || null;
-      const cpmPct = baseline && cpm > 0
-        ? Math.round(((cpm - baseline) / baseline) * 100)
+      const cpmPct = baseline && hCpm > 0
+        ? Math.round(((hCpm - baseline) / baseline) * 100)
         : null;
 
-      // Health scoring logic
+      const daysSinceLaunch = estimateDays(adset.name);
+
+      // ── HEALTH CLASSIFICATION (v2.1 logic) ──
       let health = 'healthy';
       let action = 'Let it run';
       let killReason = null;
+      let healthNote = null;
 
+      // 1. Dead / paused
       if (adset.status === 'PAUSED' || adset.status === 'OFF') {
         health = 'dead';
         action = 'Already killed';
-      } else if (spent > 25 && purchases === 0) {
-        health = 'danger';
-        action = 'KILL NOW';
-        killReason = `$${spent} spent, 0 purchases`;
-      } else if (cpmPct && cpmPct > 80) {
-        health = 'danger';
-        action = 'KILL — CPM breach';
-        killReason = `CPM +${cpmPct}% above baseline`;
-      } else if (freq > 2.5) {
-        health = 'danger';
-        action = 'KILL — Audience exhausted';
-        killReason = `Frequency ${freq}, audience burned`;
-      } else if (cpa && parseFloat(cpa) > 25) {
-        health = 'dying';
-        action = 'Watch closely';
-      } else if (spent > 15 && purchases === 0) {
-        health = 'warning';
-        action = 'Watch — no purchases yet';
-      } else if (cpmPct && cpmPct > 40) {
-        health = 'warning';
-        action = 'Watch — CPM rising';
+      }
+      // 2. In review / not yet started
+      else if (adset.effective_status === 'PENDING_REVIEW' || adset.effective_status === 'PENDING_BILLING_INITIAL') {
+        health = 'in_review';
+        action = 'In review — wait for approval';
+      }
+      else if (hSpent === 0 && daysSinceLaunch !== null && daysSinceLaunch <= 2) {
+        health = 'in_review';
+        action = 'Just launched — waiting for first spend';
+      }
+      // 3. Not enough data to classify
+      else if (hSpent < MIN_SPEND_FOR_CLASSIFICATION || hImpressions < MIN_IMPRESSIONS_FOR_CLASSIFICATION) {
+        health = 'gathering_data';
+        action = 'Gathering data — check back tomorrow';
+        healthNote = `$${hSpent.toFixed(2)} spent, ${hImpressions} impressions (need $${MIN_SPEND_FOR_CLASSIFICATION}+ and ${MIN_IMPRESSIONS_FOR_CLASSIFICATION}+)`;
+      }
+      // 4. Full classification with 3-day data
+      else {
+        // ── KILL checks (strictest — requires sufficient spend) ──
+        if (hSpent >= MIN_SPEND_FOR_KILL && hPurchases === 0) {
+          health = 'kill';
+          action = 'KILL — No conversions after significant spend';
+          killReason = `$${hSpent.toFixed(0)} spent, 0 purchases in 3 days`;
+        }
+        else if (hCpa && hCpa > CPA_KILL_THRESHOLD && hSpent >= MIN_SPEND_FOR_KILL) {
+          health = 'kill';
+          action = 'KILL — CPA too high over 3 days';
+          killReason = `3-day CPA $${hCpa.toFixed(2)} > $${CPA_KILL_THRESHOLD.toFixed(2)} (true CPA > $15)`;
+        }
+        // ── REFRESH CREATIVE (frequency exhaustion — NOT kill) ──
+        else if (hFreq >= MAX_FREQ_FOR_WATCH) {
+          health = 'refresh_creative';
+          action = 'REFRESH CREATIVE — Swap image/video + hook';
+          healthNote = `Frequency ${hFreq.toFixed(2)} over 3 days. Audience is not dead — creative is exhausted.`;
+        }
+        // ── WATCH checks ──
+        else if (hCpa && hCpa > CPA_CEILING_THRESHOLD) {
+          health = 'watch';
+          action = 'Watch — CPA above $12 ceiling';
+          healthNote = `3-day CPA $${hCpa.toFixed(2)} > $${CPA_CEILING_THRESHOLD.toFixed(2)} (true CPA > $12)`;
+        }
+        else if (hCpa && hCpa > CPA_WATCH_THRESHOLD) {
+          health = 'watch';
+          action = 'Watch — CPA above $10 target';
+          healthNote = `3-day CPA $${hCpa.toFixed(2)} vs target $${CPA_WATCH_THRESHOLD.toFixed(2)} (true ~$${(hCpa * 0.71).toFixed(2)})`;
+        }
+        else if (cpmPct && cpmPct > CPM_ELEVATED_THRESHOLD) {
+          health = 'watch';
+          action = 'Watch — CPM significantly elevated';
+          healthNote = `CPM +${cpmPct}% above baseline, but still converting`;
+        }
+        else if (cpmPct && cpmPct > CPM_WATCH_THRESHOLD) {
+          health = 'watch';
+          action = 'Watch — CPM rising';
+          healthNote = `CPM +${cpmPct}% above baseline`;
+        }
+        else if (hFreq >= MAX_FREQ_FOR_HEALTHY) {
+          health = 'watch';
+          action = 'Watch — Frequency climbing';
+          healthNote = `Frequency ${hFreq.toFixed(2)} — approaching creative exhaustion`;
+        }
+        // ── HEALTHY ──
+        else {
+          health = 'healthy';
+          action = 'Let it run';
+        }
       }
 
       return {
         id: adset.id,
         name: adset.name,
         status: adset.status,
+        effectiveStatus: adset.effective_status,
         campaign: adset.campaign?.name || '',
-        spent,
-        purchases,
-        purchaseValue: purchaseValue > 0 ? parseFloat(purchaseValue.toFixed(2)) : null,
-        cpa: cpa ? parseFloat(cpa) : null,
-        roas: roas ? parseFloat(roas) : null,
-        cpm: cpm > 0 ? parseFloat(cpm.toFixed(2)) : null,
-        frequency: freq > 0 ? parseFloat(freq.toFixed(2)) : null,
+        // Display metrics (from selected range)
+        spent: dispSpent,
+        impressions: dispImpressions,
+        purchases: dispPurchases,
+        purchaseValue: dispPurchaseValue > 0 ? parseFloat(dispPurchaseValue.toFixed(2)) : null,
+        cpa: dispCpa ? parseFloat(dispCpa) : null,
+        roas: dispRoas ? parseFloat(dispRoas) : null,
+        cpm: dispCpm > 0 ? parseFloat(dispCpm.toFixed(2)) : null,
+        frequency: dispFreq > 0 ? parseFloat(dispFreq.toFixed(2)) : null,
+        // Health metrics (from 3-day window)
+        healthSpent: hSpent,
+        healthImpressions: hImpressions,
+        healthPurchases: hPurchases,
+        healthCpa: hCpa ? parseFloat(hCpa.toFixed(2)) : null,
+        healthRoas: hRoas ? parseFloat(hRoas.toFixed(2)) : null,
+        healthCpm: hCpm > 0 ? parseFloat(hCpm.toFixed(2)) : null,
+        healthFrequency: hFreq > 0 ? parseFloat(hFreq.toFixed(2)) : null,
+        // Classification
         baselineCPM: baseline,
         cpmVsBaseline: cpmPct,
         health,
         action,
         killReason,
-        daysSinceLaunch: estimateDays(adset.name),
+        healthNote,
+        daysSinceLaunch,
         lastUpdated: new Date().toISOString()
       };
     });
@@ -171,15 +302,17 @@ export default async function handler(req, res) {
 
     // ── SUMMARY ──
     const activeAds = ads.filter(a => a.status !== 'PAUSED' && a.status !== 'OFF');
-    const killList = ads.filter(a => a.health === 'danger');
+    const killList = ads.filter(a => a.health === 'kill');
 
     const summary = {
       totalAds: ads.length,
       activeAds: activeAds.length,
       healthy: ads.filter(a => a.health === 'healthy').length,
-      warning: ads.filter(a => a.health === 'warning').length,
-      dying: ads.filter(a => a.health === 'dying').length,
-      danger: killList.length,
+      watch: ads.filter(a => a.health === 'watch').length,
+      refreshCreative: ads.filter(a => a.health === 'refresh_creative').length,
+      kill: killList.length,
+      inReview: ads.filter(a => a.health === 'in_review').length,
+      gatheringData: ads.filter(a => a.health === 'gathering_data').length,
       dead: ads.filter(a => a.health === 'dead').length,
       totalSpent: ads.reduce((s, a) => s + a.spent, 0).toFixed(2),
       totalPurchases: ads.reduce((s, a) => s + a.purchases, 0),
@@ -192,6 +325,10 @@ export default async function handler(req, res) {
         : null,
       killList: killList.map(a => ({ name: a.name, reason: a.killReason })),
       dateRange: rangeLabel,
+      healthWindow: `${healthSince} → ${healthUntil}`,
+      targetCPA: TARGET_CPA,
+      targetROAS: TARGET_ROAS,
+      trueCPACeiling: 12.00,
       lastRefresh: new Date().toLocaleString()
     };
 
@@ -215,17 +352,14 @@ function getActionCount(actions, actionType) {
   if (!actions || !Array.isArray(actions)) return 0;
 
   if (actionType === 'purchase') {
-    // Prefer fb_pixel_purchases — matches Ads Manager "Purchases" column
     const pixelPurchase = actions.find(a =>
       a.action_type === 'offsite_conversion.fb_pixel_purchases'
     );
     if (pixelPurchase) return parseInt(pixelPurchase.value) || 0;
 
-    // Fallback to generic purchase (often = "Results" / optimization event)
     const purchase = actions.find(a => a.action_type === 'purchase');
     if (purchase) return parseInt(purchase.value) || 0;
 
-    // Last resort
     const anyPurchase = actions.find(a => a.action_type?.includes('purchase'));
     return anyPurchase ? parseInt(anyPurchase.value) || 0 : 0;
   }
