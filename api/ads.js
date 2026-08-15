@@ -332,6 +332,11 @@ export default async function handler(req, res) {
     const activeAds = ads.filter(a => a.status !== 'PAUSED' && a.status !== 'OFF');
     const killList = ads.filter(a => a.health === 'kill');
 
+    // ── FIXED: Calculate weighted totals for correct averages ──
+    const totalSpentNum = ads.reduce((s, a) => s + a.spent, 0);
+    const totalPurchasesNum = ads.reduce((s, a) => s + a.purchases, 0);
+    const totalRevenueNum = ads.reduce((s, a) => s + (a.purchaseValue || 0), 0);
+
     const summary = {
       totalAds: ads.length,
       activeAds: activeAds.length,
@@ -342,15 +347,13 @@ export default async function handler(req, res) {
       inReview: ads.filter(a => a.health === 'in_review').length,
       gatheringData: ads.filter(a => a.health === 'gathering_data').length,
       dead: ads.filter(a => a.health === 'dead').length,
-      totalSpent: ads.reduce((s, a) => s + a.spent, 0).toFixed(2),
-      totalPurchases: ads.reduce((s, a) => s + a.purchases, 0),
-      totalRevenue: ads.reduce((s, a) => s + (a.purchaseValue || 0), 0).toFixed(2),
-      avgCPA: activeAds.filter(a => a.cpa).length > 0
-        ? (activeAds.filter(a => a.cpa).reduce((s, a) => s + a.cpa, 0) / activeAds.filter(a => a.cpa).length).toFixed(2)
-        : null,
-      avgROAS: activeAds.filter(a => a.roas).length > 0
-        ? (activeAds.filter(a => a.roas).reduce((s, a) => s + a.roas, 0) / activeAds.filter(a => a.roas).length).toFixed(2)
-        : null,
+      // ── FIXED: Use pre-calculated numeric totals ──
+      totalSpent: totalSpentNum.toFixed(2),
+      totalPurchases: totalPurchasesNum,
+      totalRevenue: totalRevenueNum.toFixed(2),
+      // ── FIXED: Weighted averages (Total Spent / Total Purchases, Total Revenue / Total Spent) ──
+      avgCPA: totalPurchasesNum > 0 ? (totalSpentNum / totalPurchasesNum).toFixed(2) : null,
+      avgROAS: totalSpentNum > 0 ? (totalRevenueNum / totalSpentNum).toFixed(2) : null,
       killList: killList.map(a => ({ name: a.name, reason: a.killReason })),
       dateRange: rangeLabel,
       healthWindow: `${healthSince} → ${healthUntil}`,
