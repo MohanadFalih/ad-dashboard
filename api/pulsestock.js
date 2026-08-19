@@ -1,4 +1,4 @@
-// api/pulsestock.js — Vercel Serverless Function v1.0
+// api/pulsestock.js — Vercel Serverless Function v1.1
 // Meta → PulseStock bridge. AD-LEVEL insights (SKU lives in ad names),
 // aggregated per product SKU. Consumed live by the PulseStock dashboard.
 // Reuses the same env vars as api/ads.js: META_ACCESS_TOKEN, AD_ACCOUNT_ID,
@@ -245,7 +245,9 @@ function classifyHealth(status, effectiveStatus, hSpent, hImpressions, hPurchase
 }
 
 function extractModelCode(name) {
-  const match = (name || '').match(/([A-Z])[-\s]?(\d{3,4})/i);
+  // Word-boundary: the letter must NOT be part of a longer word
+  // (prevents "fast with 136 products" -> false "H-136")
+  const match = (name || '').match(/(?:^|[^A-Za-z0-9])([A-Z])[-\s]?(\d{3,4})(?!\d)/i);
   if (match) return `${match[1].toUpperCase()}-${match[2]}`;
   const nameMatch = (name || '').match(/(KOLIK|TAFETTA)/i);
   if (nameMatch) return nameMatch[1].toUpperCase();
