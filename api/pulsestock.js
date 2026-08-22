@@ -1,9 +1,25 @@
-// api/pulsestock.js — Vercel Serverless Function v1.1
-// Meta → PulseStock bridge. AD-LEVEL insights (SKU lives in ad names),
-// aggregated per product SKU. Consumed live by the PulseStock dashboard.
-// Reuses the same env vars as api/ads.js: META_ACCESS_TOKEN, AD_ACCOUNT_ID,
-// META_APP_ID, META_APP_SECRET (optional, for token refresh).
-// Optional: USD_TO_IQD (default 1380), TARGET_CPA, TARGET_ROAS.
+// api/pulsestock.js — Vercel Serverless Function v1.2
+// Meta → PulseStock bridge.
+//
+// v1.2 (2026-08-22) — ACCURACY REWRITE.
+// v1.1 enumerated /act_X/ads and attached insights per ad. That silently
+// dropped spend from ARCHIVED ads and ads inside OFF/paused campaigns
+// (dashboard showed $581 for a 7-day window where Ads Manager showed
+// $1,336 — 56% of spend missing).
+// v1.2 sources ALL metrics from the Insights edge:
+//   · /act_X/insights?level=ad  → one row per ad that DELIVERED in the
+//     window (active, paused, or archived — insights are historical facts)
+//   · /act_X/insights (account) → authoritative total that by definition
+//     matches Ads Manager's "Total Spent" row
+//   · /act_X/ads                → metadata ONLY (current status, adset,
+//     campaign) for health classification; never a source of spend.
+// Response shape is backward-compatible with v1.1, plus:
+//   summary.accountSpent / accountSpentIQD  (authoritative, account level)
+//   summary.adLevelSpent                    (sum over ad-level rows;
+//                                            should equal accountSpent)
+// Reuses env vars: META_ACCESS_TOKEN, AD_ACCOUNT_ID (required);
+// META_APP_ID, META_APP_SECRET (optional, token refresh);
+// USD_TO_IQD (default 1380), TARGET_CPA, TARGET_ROAS (optional).
 
 const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 const AD_ACCOUNT_ID = process.env.AD_ACCOUNT_ID;
@@ -26,7 +42,11 @@ const CPA_WATCH_THRESHOLD = TARGET_CPA;
 const CPA_CEILING_THRESHOLD = TARGET_CPA * 1.2;
 const CPA_KILL_THRESHOLD = TARGET_CPA * 1.5;
 
-const INSIGHT_FIELDS = 'spend,impressions,cpm,cpc,ctr,frequency,actions,action_values';
+// ad_id/adset_id/campaign_id are returned so we can join metadata by id.
+const INSIGHT_FIELDS =
+  'ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,' +
+  'spend,impressions,cpm,cpc,ctr,frequency,actions,action_values';
+const ACCOUNT_FIELDS = 'spend,impressions,actions,action_values';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -42,51 +62,69 @@ export default async function handler(req, res) {
     const { start, end, preset } = req.query;
     const healthSince = getDateString(-2);
     const healthUntil = getDateString(0);
-    const healthRange = encodeURIComponent(JSON.stringify({ since: healthSince, until: healthUntil }));
 
-    let displayInsightsParam;
+    let windowParam;      // query fragment selecting the insights window
     let rangeLabel;
+    let sameWindow;
     if (start && end) {
-      displayInsightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify({ since: start, until: end }))}){${INSIGHT_FIELDS}}`;
+      windowParam = `time_range=${encodeURIComponent(JSON.stringify({ since: start, until: end }))}`;
       rangeLabel = `${start} → ${end}`;
-    } else if (preset) {
-      displayInsightsParam = `insights.date_preset(${preset}){${INSIGHT_FIELDS}}`;
-      rangeLabel = preset;
+      sameWindow = start === healthSince && end === healthUntil;
     } else {
-      displayInsightsParam = `insights.time_range(${encodeURIComponent(JSON.stringify({ since: healthSince, until: healthUntil }))}){${INSIGHT_FIELDS}}`;
-      rangeLabel = 'last_3d';
+      const p = preset || 'last_3d';
+      windowParam = `date_preset=${p}`;
+      rangeLabel = p;
+      sameWindow = p === 'last_3d';
     }
 
-    // ── FETCH AD-LEVEL DATA (display window) ──
-    const fields = `name,status,effective_status,adset{name},campaign{name},${displayInsightsParam}`;
-    let displayData = await fetchAllPages(
-      `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/ads?fields=${fields}&limit=500`,
+    // ── 1. AD-LEVEL INSIGHTS (display window) — includes paused/archived ads ──
+    const displayData = await fetchAllPages(
+      `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/insights?level=ad&${windowParam}&fields=${INSIGHT_FIELDS}&limit=500`,
       META_ACCESS_TOKEN
     );
     if (displayData.error) return res.status(400).json({ error: displayData.error });
 
-    // ── FETCH AD-LEVEL HEALTH DATA (3-day window) — skip if same window ──
-    let healthData = displayData;
-    const sameWindow = (!start && !end && !preset) || preset === 'last_3d' ||
-      (start === healthSince && end === healthUntil);
+    // ── 2. ACCOUNT-LEVEL INSIGHTS — authoritative total (matches Ads Manager) ──
+    const accountData = await fetchAllPages(
+      `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/insights?${windowParam}&fields=${ACCOUNT_FIELDS}&limit=5`,
+      META_ACCESS_TOKEN
+    );
+    const acc = (!accountData.error && accountData.data?.[0]) || {};
+    const accountSpent = parseFloat(acc.spend) || 0;
+
+    // ── 3. AD-LEVEL HEALTH INSIGHTS (fixed 3-day window) — skip if same ──
+    let healthRows = displayData.data || [];
     if (!sameWindow) {
-      const hFields = `name,status,effective_status,adset{name},campaign{name},insights.time_range(${healthRange}){${INSIGHT_FIELDS}}`;
-      healthData = await fetchAllPages(
-        `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/ads?fields=${hFields}&limit=500`,
+      const hr = encodeURIComponent(JSON.stringify({ since: healthSince, until: healthUntil }));
+      const hd = await fetchAllPages(
+        `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/insights?level=ad&time_range=${hr}&fields=${INSIGHT_FIELDS}&limit=500`,
         META_ACCESS_TOKEN
       );
-      if (healthData.error) healthData = displayData; // degrade gracefully
+      if (!hd.error) healthRows = hd.data || []; // degrade gracefully
+    }
+    const healthMap = {};
+    healthRows.forEach(r => { healthMap[r.ad_id] = r; });
+
+    // ── 4. CURRENT STATUSES (metadata only — never a spend source) ──
+    // Archived/deleted ads won't appear here; their insights rows still count.
+    const metaData = await fetchAllPages(
+      `https://graph.facebook.com/v18.0/act_${AD_ACCOUNT_ID}/ads?fields=name,status,effective_status,adset{name},campaign{name}&limit=500`,
+      META_ACCESS_TOKEN
+    );
+    const statusById = {};
+    if (!metaData.error) {
+      (metaData.data || []).forEach(ad => {
+        statusById[ad.id] = {
+          status: ad.status || 'UNKNOWN',
+          effectiveStatus: ad.effective_status || 'UNKNOWN'
+        };
+      });
     }
 
-    const healthMap = {};
-    (healthData.data || []).forEach(ad => {
-      healthMap[ad.id] = ad.insights?.data?.[0] || {};
-    });
-
-    // ── PROCESS ADS ──
-    const ads = (displayData.data || []).map(ad => {
-      const ins = ad.insights?.data?.[0] || {};
-      const h = healthMap[ad.id] || ins;
+    // ── 5. PROCESS ADS (every insights row = an ad that spent/showed) ──
+    const ads = (displayData.data || []).map(ins => {
+      const h = healthMap[ins.ad_id] || {};
+      const meta = statusById[ins.ad_id] || null;
 
       const spent = parseFloat(ins.spend) || 0;
       const impressions = parseInt(ins.impressions) || 0;
@@ -100,16 +138,20 @@ export default async function handler(req, res) {
       const hFreq = parseFloat(h.frequency) || 0;
       const hCpa = hPurchases > 0 ? hSpent / hPurchases : null;
 
-      const sku = extractModelCode(ad.name);
+      const sku = extractModelCode(ins.ad_name);
+
+      // Ads missing from the /ads edge are archived or deleted.
+      const status = meta ? meta.status : 'ARCHIVED';
+      const effectiveStatus = meta ? meta.effectiveStatus : 'ARCHIVED';
 
       return {
-        id: ad.id,
-        name: ad.name,
+        id: ins.ad_id,
+        name: ins.ad_name || 'Untitled ad',
         sku,                       // e.g. "T-7079" — null for funnel ads (DM_SHOP etc.)
-        status: ad.status,
-        effectiveStatus: ad.effective_status,
-        adset: ad.adset?.name || '',
-        campaign: ad.campaign?.name || '',
+        status,
+        effectiveStatus,
+        adset: ins.adset_name || '',
+        campaign: ins.campaign_name || '',
         spent: round2(spent),
         impressions,
         purchases,
@@ -124,11 +166,11 @@ export default async function handler(req, res) {
         healthRoas: hSpent > 0 ? round2(hPurchaseValue / hSpent) : null,
         healthCpa: hCpa ? round2(hCpa) : null,
         healthFrequency: hFreq > 0 ? round2(hFreq) : null,
-        health: classifyHealth(ad.status, ad.effective_status, hSpent, hImpressions, hPurchases, hCpa, hFreq)
+        health: classifyHealth(status, effectiveStatus, hSpent, hImpressions, hPurchases, hCpa, hFreq)
       };
     });
 
-    // ── AGGREGATE PER PRODUCT SKU ──
+    // ── 6. AGGREGATE PER PRODUCT SKU ──
     const bySku = {};
     const unattributed = [];
     ads.forEach(ad => {
@@ -170,8 +212,9 @@ export default async function handler(req, res) {
       };
     }).sort((a, b) => b.spent - a.spent);
 
-    // ── SUMMARY ──
-    const totalSpent = ads.reduce((s, a) => s + a.spent, 0);
+    // ── 7. SUMMARY — account level is authoritative for the totals ──
+    const adLevelSpent = ads.reduce((s, a) => s + a.spent, 0);
+    const totalSpent = accountSpent > 0 ? accountSpent : adLevelSpent;
     const totalPurchases = ads.reduce((s, a) => s + a.purchases, 0);
     const totalRevenue = ads.reduce((s, a) => s + (a.purchaseValue || 0), 0);
     const healthCounts = { healthy: 0, watch: 0, refresh_creative: 0, kill: 0, in_review: 0, gathering_data: 0, dead: 0 };
@@ -179,6 +222,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       source: 'meta-marketing-api',
+      version: '1.2',
       currency: 'USD',
       usdToIqd: USD_TO_IQD,
       syncedAt: new Date().toISOString(),
@@ -190,13 +234,18 @@ export default async function handler(req, res) {
         productAds: ads.filter(a => a.sku).length,
         unattributedAds: unattributed.length,
         matchedSkus: products.length,
+        // Authoritative account-level spend (== Ads Manager "Total Spent").
         totalSpent: round2(totalSpent),
         totalSpentIQD: Math.round(totalSpent * USD_TO_IQD),
+        // Diagnostics: account vs sum of ad-level rows (should match).
+        accountSpent: round2(accountSpent),
+        accountSpentIQD: Math.round(accountSpent * USD_TO_IQD),
+        adLevelSpent: round2(adLevelSpent),
         unattributedSpent: round2(unattributed.reduce((s, a) => s + a.spent, 0)),
         totalPurchases,
         totalRevenue: round2(totalRevenue),
-        avgCPA: totalPurchases > 0 ? round2(totalSpent / totalPurchases) : null,
-        avgROAS: totalSpent > 0 ? round2(totalRevenue / totalSpent) : null,
+        avgCPA: totalPurchases > 0 ? round2(adLevelSpent / totalPurchases) : null,
+        avgROAS: adLevelSpent > 0 ? round2(totalRevenue / adLevelSpent) : null,
         healthCounts,
         killList: ads.filter(a => a.health === 'kill').map(a => ({ name: a.name, sku: a.sku, spent: a.healthSpent }))
       },
@@ -210,7 +259,7 @@ export default async function handler(req, res) {
   }
 }
 
-// ── HELPERS (ported from ads.js) ──
+// ── HELPERS ──
 
 async function fetchAllPages(baseUrl, token) {
   let url = `${baseUrl}&access_token=${token}`;
@@ -232,7 +281,7 @@ async function fetchAllPages(baseUrl, token) {
 }
 
 function classifyHealth(status, effectiveStatus, hSpent, hImpressions, hPurchases, hCpa, hFreq) {
-  if (status === 'PAUSED' || status === 'OFF') return 'dead';
+  if (status === 'PAUSED' || status === 'OFF' || status === 'ARCHIVED' || status === 'DELETED') return 'dead';
   if (effectiveStatus === 'PENDING_REVIEW' || effectiveStatus === 'PENDING_BILLING_INITIAL') return 'in_review';
   if (hSpent < MIN_SPEND_FOR_CLASSIFICATION || hImpressions < MIN_IMPRESSIONS_FOR_CLASSIFICATION) return 'gathering_data';
   if (hSpent >= MIN_SPEND_FOR_KILL && hPurchases === 0) return 'kill';
